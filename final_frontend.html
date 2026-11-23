@@ -954,10 +954,9 @@ function renderPage() {
 function renderAuth() {
   const login=ui.authTab==="login";
   const reset=ui.authTab==="reset";
-  const verifyEmail=ui.authTab==="verify-email";
   const setPassword=new URLSearchParams(location.search).has("reset-password");
   const runArrival=shouldRunArrival();
-  const authMode=setPassword?"password-reset-confirm":verifyEmail?"signup-verify":reset?"password-reset":login?"login":"signup";
+  const authMode=setPassword?"password-reset-confirm":reset?"password-reset":login?"login":"signup";
   app.innerHTML=`
     ${runArrival?arrivalMarkup():""}
     <main class="auth-shell ${runArrival?"auth-awaiting":"auth-revealed"}" ${runArrival?"inert":""}>
@@ -972,22 +971,20 @@ function renderAuth() {
         <div class="mini-ledger" aria-hidden="true"><div class="mini-ledger-row"><span class="time">LIVE</span><span>Event inventory, shared with your crew</span><span class="tick">SYNCED</span></div><div class="mini-ledger-row"><span class="time">RLS</span><span>Membership controls event access</span><span class="tick">PRIVATE</span></div><div class="mini-ledger-row"><span class="time">AUDIT</span><span>Changes stay in the event ledger</span><span class="tick">READY</span></div></div>
       </section>
       <section class="auth-panel"><div class="auth-card">
-        ${!setPassword&&!verifyEmail?`<div class="auth-tabs"><button class="auth-tab ${login&&!reset?"active":""}" data-action="auth-tab" data-tab="login">Sign in</button><button class="auth-tab ${!login&&!reset?"active":""}" data-action="auth-tab" data-tab="signup">Make an account</button></div>`:""}
-        <h2>${setPassword?"Choose a new password.":verifyEmail?"Check your email.":reset?"Reset your password.":login?"Welcome back.":"Start in the backroom."}</h2>
-        <p class="intro">${setPassword?"Choose a strong password for your account.":verifyEmail?"Enter the six-digit code we sent to verify your address. You’ll be signed in automatically.":reset?"We’ll email you a secure reset link.":login?"Your event floor is waiting.":"Create an account, then start or join an event."}</p>
+        ${!setPassword?`<div class="auth-tabs"><button class="auth-tab ${login&&!reset?"active":""}" data-action="auth-tab" data-tab="login">Sign in</button><button class="auth-tab ${!login&&!reset?"active":""}" data-action="auth-tab" data-tab="signup">Make an account</button></div>`:""}
+        <h2>${setPassword?"Choose a new password.":reset?"Reset your password.":login?"Welcome back.":"Start in the backroom."}</h2>
+        <p class="intro">${setPassword?"Choose a new password for your account.":reset?"We’ll email you a secure reset link.":login?"Your event floor is waiting.":"Create an account, then start or join an event."}</p>
         <form class="auth-form" data-form="${authMode}">
-          ${!login&&!reset&&!setPassword&&!verifyEmail?`<div class="field"><label for="auth-name">Your name</label><input class="input" id="auth-name" name="name" autocomplete="name" maxlength="100" placeholder="e.g. Rhea Kapoor" required></div>`:""}
-          ${!setPassword&&!verifyEmail?`<div class="field"><label for="auth-email">Email</label><input class="input" id="auth-email" type="email" name="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></div>`:""}
-          ${verifyEmail?`<div class="field"><label for="auth-email-display">Account email</label><input class="input" id="auth-email-display" type="email" value="${esc(ui.pendingEmail)}" readonly></div><div class="field"><label for="auth-otp">Six-digit code</label><input class="input" id="auth-otp" name="token" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="000000" required></div>`:""}
-          ${!reset&&!verifyEmail?`<div class="field"><label for="auth-password">${setPassword?"New password":"Password"}</label><div class="password-wrap"><input class="input" id="auth-password" type="password" name="password" autocomplete="${login?"current-password":"new-password"}" minlength="12" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></div><p class="help">Use at least 12 characters.</p></div>`:""}
-          ${!login&&!reset&&!setPassword&&!verifyEmail?`<div class="field"><label for="auth-confirm">Confirm password</label><input class="input" id="auth-confirm" type="password" name="confirmPassword" autocomplete="new-password" minlength="12" maxlength="128" required></div>`:""}
+          ${!login&&!reset&&!setPassword?`<div class="field"><label for="auth-name">Your name</label><input class="input" id="auth-name" name="name" autocomplete="name" maxlength="100" placeholder="e.g. Rhea Kapoor" required></div>`:""}
+          ${!setPassword?`<div class="field"><label for="auth-email">Email</label><input class="input" id="auth-email" type="email" name="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></div>`:""}
+          ${!reset?`<div class="field"><label for="auth-password">${setPassword?"New password":"Password"}</label><div class="password-wrap"><input class="input" id="auth-password" type="password" name="password" autocomplete="${login?"current-password":"new-password"}" minlength="12" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></div><p class="help">Use at least 12 characters.</p></div>`:""}
+          ${!login&&!reset&&!setPassword?`<div class="field"><label for="auth-confirm">Confirm password</label><input class="input" id="auth-confirm" type="password" name="confirmPassword" autocomplete="new-password" minlength="12" maxlength="128" required></div>`:""}
           ${!setPassword?`<div class="field"><span class="field-label">Human verification</span><div id="turnstile-widget" aria-label="Human verification"></div><p id="turnstile-error" class="error-text" role="alert" hidden></p>${!backendConfig?.turnstileSiteKey?`<p class="error-text">Human verification is not configured for this deployment yet.</p>`:""}</div>`:""}
           ${ui.authError?`<p class="error-text" role="alert">${esc(ui.authError)}</p>`:""}
           ${ui.authNotice?`<p class="help" role="status">${esc(ui.authNotice)}</p>`:""}
-          ${reset?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Sending…":"Send reset link"} ${icon("arrow")}</button>`:setPassword?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Saving…":"Update password"} ${icon("arrow")}</button>`:verifyEmail?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Verifying…":"Verify & sign in"} ${icon("arrow")}</button>`:`<button class="btn primary" type="submit" ${ui.authBusy||!backendConfig?.turnstileSiteKey?"disabled":""}>${ui.authBusy?"Working…":login?"Open event floor":"Create my account"} ${icon("arrow")}</button>`}
+          ${reset?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Sending…":"Send reset link"} ${icon("arrow")}</button>`:setPassword?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Saving…":"Update password"} ${icon("arrow")}</button>`:`<button class="btn primary" type="submit" ${ui.authBusy||!backendConfig?.turnstileSiteKey?"disabled":""}>${ui.authBusy?"Working…":login?"Open event floor":"Create my account"} ${icon("arrow")}</button>`}
           ${login?`<button class="btn link" type="button" data-action="password-reset">Forgot password?</button>`:""}
         </form>
-        ${verifyEmail?`<div class="row gap" style="margin-top:14px"><button class="btn small soft" type="button" data-action="resend-signup-otp" ${ui.authBusy?"disabled":""}>Resend code</button><button class="btn link" type="button" data-action="auth-tab" data-tab="signup">Back to account details</button></div>`:""}
         ${reset?`<button class="btn link" style="margin-top:16px" data-action="auth-tab" data-tab="login">Back to sign in</button>`:""}
       </div><div class="auth-footer">Private event workspaces · Supabase authentication</div></section>
     </main>`;
@@ -1208,14 +1205,14 @@ function syncCategoryDraftFromDom() {
 async function handleSubmit(form) {
   const data=Object.fromEntries(new FormData(form));
   const type=form.dataset.form;
-  if(type==="login" || type==="signup" || type==="signup-verify" || type==="password-reset" || type==="password-reset-confirm") {
+  if(type==="login" || type==="signup" || type==="password-reset" || type==="password-reset-confirm") {
     ui.authError="";ui.authNotice="";
     if(type==="password-reset-confirm"){
       if(String(data.password||"").length<12||String(data.password).length>128){ui.authError="Use a password between 12 and 128 characters.";render();return;}
       if(String(data.password)!==String(data.confirmPassword)){ui.authError="Passwords do not match.";render();return;}
       ui.authBusy=true;render();try{await backend.updatePassword(String(data.password));history.replaceState({},"",location.pathname);ui.authTab="login";ui.authNotice="Your password was updated. Sign in with your new password.";ui.authBusy=false;render();}catch(error){ui.authBusy=false;ui.authError=error.message;render();}return;
     }
-    const email=String(type==="signup-verify"?ui.pendingEmail:data.email||"").trim().toLowerCase();
+    const email=String(data.email||"").trim().toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254){ui.authError="Enter a valid email address.";render();return;}
     if(type==="signup"){
       if(String(data.name||"").trim().length<1||String(data.name).trim().length>100){ui.authError="Enter a name of 1 to 100 characters.";render();return;}
@@ -1231,15 +1228,13 @@ async function handleSubmit(form) {
         authUser=await backend.signIn({email,password:String(data.password)});session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();
       }else if(type==="signup"){
         const result=await backend.signUp({name:String(data.name).trim(),email,password:String(data.password)});
-        if(result.session&&result.user){authUser=result.user;session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();}else{ui.pendingEmail=email;ui.authTab="verify-email";ui.authNotice="A six-digit verification code was sent. Enter it here to finish creating your account and sign in.";}
-      }else if(type==="signup-verify"){
-        if(!/^\d{6}$/.test(String(data.token||""))){ui.authBusy=false;ui.authError="Enter the six-digit code from your email.";render();return;}
-        const result=await backend.verifySignupOtp({email,token:String(data.token).trim()});authUser=result.user;session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();ui.pendingEmail="";ui.authTab="login";
+        if(!result.session||!result.user)throw new Error("Account created, but sign-in was not returned. Turn off Confirm email in the Supabase Email provider settings, then try again.");
+        authUser=result.user;session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();
       }else{
         await backend.requestPasswordReset(email);ui.authNotice="If this account exists, a reset link is on its way.";
       }
       ui.authError="";ui.authBusy=false;makeCaptcha();render();
-    }catch(error){ui.authBusy=false;ui.authError=error.message||"The request could not be completed.";if((type==="signup"&&/temporarily limited verification emails|built-in email sender/i.test(ui.authError))||(type==="login"&&/Verify your email/i.test(ui.authError))){ui.pendingEmail=email;ui.authTab="verify-email";ui.authNotice="This address may already have a pending signup. Enter its six-digit code, or request one after the email limit resets.";}makeCaptcha();render();}
+    }catch(error){ui.authBusy=false;ui.authError=error.message||"The request could not be completed.";makeCaptcha();render();}
     return;
   } else if(type==="create-event") {
     const name=String(data.name||"").trim();if(!name||name.length>120){ui.modal={...ui.modal,error:"Event name must be between 1 and 120 characters."};renderModal();return;}
@@ -1332,13 +1327,6 @@ document.addEventListener("click",async e=>{
   else if(action==="replay-arrival"){ui.popover=null;render();replayArrival();}
   else if(action==="toggle-password"){const input=el.closest(".password-wrap")?.querySelector("input");if(input){const show=input.type==="password";input.type=show?"text":"password";el.setAttribute("aria-pressed",String(show));el.setAttribute("aria-label",show?"Hide password":"Show password");}}
   else if(action==="auth-tab"){withTransition(()=>{ui.authTab=el.dataset.tab;ui.authError="";makeCaptcha();render();});}
-  else if(action==="resend-signup-otp"){
-    if(!ui.pendingEmail){ui.authTab="signup";ui.authError="Enter your email and create your account again.";render();return;}
-    if(!ui.captchaToken){ui.authError="Complete the human verification before requesting another code.";render();return;}
-    ui.authBusy=true;ui.authError="";render();
-    try{await backend.verifyCaptcha(ui.captchaToken);await backend.resendSignupOtp(ui.pendingEmail);ui.authNotice="A new six-digit code was sent. Check your inbox and spam folder.";ui.authBusy=false;makeCaptcha();render();}
-    catch(error){ui.authBusy=false;ui.authError=error.message||"Could not resend the code.";makeCaptcha();render();}
-  }
   else if(action==="refresh-captcha"){makeCaptcha();ui.authError="";render();}
   else if(action==="navigate"){withTransition(()=>{ui.page=el.dataset.page;ui.popover=null;if(ui.page==="activity")currentEvent().notifications.forEach(n=>n.unread=false);persist({broadcast:false});});}
   else if(action==="toggle-popover"){ui.popover=ui.popover===el.dataset.popover?null:el.dataset.popover;renderPopover();}
