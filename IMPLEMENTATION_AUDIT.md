@@ -1,25 +1,24 @@
 # Implementation audit
 
-Checked against the current repository files and live Supabase project on 2026-11-23. `final_frontend.html` remains the source UI reference.
+Updated 2026-11-23 from repository checks and connected Supabase/Vercel state. “Partial” means code or configuration exists but the complete user flow has not been verified.
 
 | Requirement | Implemented in | Verification | Status |
 |---|---|---|---|
-| Supabase project selection | Existing ref `oxjsqmuguxaqdkfvpwmg` | Project name, region, status inspected | Complete |
-| Supabase schema | `supabase/migrations/` | Two remote migrations recorded; 11 public tables visible | Complete |
-| RLS | Both migrations | Live inspection confirms RLS on all 11 public tables; security advisor reviewed | Partial: intentionally callable authenticated SECURITY DEFINER RPCs remain flagged for review |
-| Profile creation | Initial migration trigger | Trigger installed; no registration test account created | Partial |
-| Authentication UI flow | `final_frontend.html` | Not connected to Supabase; existing handlers still use demo state | Incomplete |
-| CAPTCHA | `api/captcha/verify.js` | Syntax checked only; no Turnstile keys/domain configured | Partial |
-| Server-side validation | `lib/validation.js`, SQL constraints | Unit tests cover credentials, quantity, image metadata | Partial |
-| CRUD | SQL tables/RLS and atomic quantity RPC | UI mutations are not wired to these tables/RPCs | Incomplete |
-| Search/filter/sort | Existing prototype UI | Not verified against persisted data | Incomplete |
-| Realtime | Initial migration publication config | SQL verified six public tables published; UI subscription not connected | Partial |
-| Image storage | Initial migration private bucket/policies | Live query confirms bucket exists; upload UI not connected | Partial |
-| CSV/XLSX import | Existing prototype parser | Parser not wired to transactional server insertion | Incomplete |
-| Responsive UI | `final_frontend.html` reference | No browser comparison performed | Incomplete |
-| Vercel project | Existing team scope | Access returned 403; one-time authorization link supplied | Blocked pending team access |
-| Local build | `scripts/check.mjs` | Node syntax/document checks pass; no npm executable in this environment | Partial |
-| Automated tests | `tests/validation.test.js` | `node --test tests/*.test.js`: 3 passed | Partial |
-| Production deployment | Existing Vercel project | Not attempted | Incomplete |
+| Existing project selection | Vercel project `wd-project`; Supabase ref `oxjsqmuguxaqdkfvpwmg` | Existing project IDs and status inspected | Complete |
+| Root page / Vercel output | `vercel.json`; existing Vercel project output directory `.` | Preview deployment READY; `/` returned HTTP 200 | Complete for preview |
+| Supabase schema | `supabase/migrations/` | Three migrations applied; 11 public tables and RLS inspected | Complete |
+| Authentication | `final_frontend.html`, `lib/backend.js` | Supabase Auth calls wired; no test account or end-to-end login run | Partial |
+| CAPTCHA | `api/captcha/verify.js`, Turnstile widget in `final_frontend.html` | Server verification implemented; Vercel site/secret keys are not configured, login correctly remains disabled | Partial / blocked on keys |
+| Client/server validation | `lib/validation.js`, form validation, API endpoint checks, SQL constraints/RPCs | `node --test tests/*.test.js`: 3 passed; no browser validation pass | Partial |
+| CRUD and role checks | `lib/backend.js`, Supabase RLS/RPCs | Client mutations wired; no full role-matrix integration test | Partial |
+| Activity/read state | `lib/backend.js`, activity and read-state tables | Persistence paths implemented; no multi-user validation | Partial |
+| Realtime | `lib/backend.js` workspace subscriptions; frontend event binding | Channel implementation present; no concurrent-browser test | Partial |
+| Search/filter/sort | Existing `final_frontend.html` UI | Retained; not verified with live rows | Partial |
+| Image storage | `lib/backend.js`, private `inventory-images` bucket/policies | Bucket and policies verified; no live upload/download test | Partial |
+| CSV/XLSX import | Existing spreadsheet parser and import UI | Parsing retained; server-side batch transaction not implemented | Incomplete |
+| Responsive design | Existing `final_frontend.html` CSS | Source preserved; no screenshot comparison run | Partial |
+| Production environment | Existing Vercel project | No environment variables configured; Turnstile credentials needed | Incomplete |
+| Production deployment | Existing production alias | Not promoted; feature branch preview verified instead | Incomplete |
+| Local checks | `scripts/check.mjs`, `tests/validation.test.js` | Syntax/document check passed; 3 tests passed; no npm binary available | Partial |
 
-This branch is an integration foundation, not a completed production application. Do not route production traffic to it until the incomplete rows are implemented and verified.
+Preview URL: `https://wd-project-cqcnwph2b-i25gangeshn-2614.vercel.app/`. The existing production alias was not changed. Configure Turnstile on the existing Cloudflare account and enter its site and secret keys directly in Vercel before enabling Auth; then run browser verification and promote the reviewed branch.
