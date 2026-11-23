@@ -636,19 +636,22 @@ body.motion-ready [data-reveal].in-view { opacity: 1; transform: translateY(0); 
   <div id="app"></div>
   <div id="popover-root"></div>
   <div id="modal-root"></div>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer onload="window.onTurnstileLoad&&window.onTurnstileLoad()"></script>
   <script>
     "use strict";
 
-const STORAGE_KEY = "backroom-demo-v3";
 const SESSION_KEY = "backroom-session-v3";
-const tabId = Math.random().toString(36).slice(2);
-const channel = "BroadcastChannel" in window ? new BroadcastChannel("backroom-live-v3") : null;
+let backend = null;
+let authUser = null;
+let backendConfig = null;
+let writeQueue = Promise.resolve();
+let unsubscribeWorkspace = null;
 const app = document.getElementById("app");
 const modalRoot = document.getElementById("modal-root");
 const popoverRoot = document.getElementById("popover-root");
 
-let db = null;
-let session = { userId: null, eventId: "evt-northstar" };
+let db = { version: 4, users: [], events: [] };
+let session = { userId: null, eventId: null };
 let ui = {
   page: "overview",
   activeCategoryId: "cat-furniture",
@@ -656,7 +659,10 @@ let ui = {
   activityFilter: "all",
   authTab: "login",
   authError: "",
-  captcha: null,
+  captchaToken: "",
+  captchaWidgetId: null,
+  authBusy: false,
+  dataError: "",
   modal: null,
   popover: null,
   rolePreview: null,
@@ -703,77 +709,55 @@ const svgPaths = {
 };
 function icon(name, cls = "") { return `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${svgPaths[name] || svgPaths.boxes}</svg>`; }
 function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[ch])); }
-function id(prefix = "id") { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`; }
+function id() { return crypto.randomUUID(); }
 function initials(name) { return String(name || "?").split(/\s+/).slice(0,2).map(v => v[0]).join("").toUpperCase(); }
 function ago(mins) { return Date.now() - mins * 60000; }
 function code(prefix) { return `${prefix}-${Math.random().toString(36).slice(2,6).toUpperCase()}-${Math.floor(10 + Math.random()*89)}`; }
 
-function createSeed() {
-  const people = [
-    { id:"u1", name:"Sachin Choudhary", email:"hello@backroom.test", password:"demo1234", color:"#f2d05d" },
-    { id:"u2", name:"Aditi Rao", email:"aditi@northstar.test", color:"#c8d9c8" },
-    { id:"u3", name:"Kabir Mehta", email:"kabir@northstar.test", color:"#d9c8b6" },
-    { id:"u4", name:"Maya Sen", email:"maya@northstar.test", color:"#c5d8dc" },
-    { id:"u5", name:"Nikhil Jain", email:"nikhil@northstar.test", color:"#e2c6c0" },
-    { id:"u6", name:"Zoya Khan", email:"zoya@northstar.test", color:"#d8d0e2" }
-  ];
-  const northstar = {
-    id:"evt-northstar", name:"Northstar '26", short:"N26", location:"The Mill, Indore", date:"14–16 December 2026", note:"Three days of talks, music and late-night load-outs.", creatorId:"u1", joinCode:"N26-MOSS-7K", adminCode:"N26-OPS-42", createdAt:ago(12000),
-    members:[
-      {userId:"u1",role:"creator",online:true,lastSeen:Date.now()}, {userId:"u2",role:"admin",online:true,lastSeen:ago(1)}, {userId:"u3",role:"admin",online:false,lastSeen:ago(34)},
-      {userId:"u4",role:"member",online:true,lastSeen:ago(2)}, {userId:"u5",role:"member",online:false,lastSeen:ago(80)}, {userId:"u6",role:"member",online:true,lastSeen:ago(4)}
-    ],
-    categories:[
-      { id:"cat-furniture", name:"Furniture", type:"counted", description:"Front-of-house, green rooms and backstage.", createdBy:"u2", assets:[
-        {id:"a-chair",name:"Folding chairs",quantity:36,target:120,min:20,location:"Dock B · Rack 4",image:null},
-        {id:"a-table",name:"Folding tables",quantity:6,target:24,min:5,location:"Dock B · Bay 2",image:null},
-        {id:"a-lamp",name:"Floor lamps",quantity:5,target:8,min:2,location:"Green room store",image:null}
-      ]},
-      { id:"cat-av", name:"AV consumables", type:"counted", description:"Small gear that disappears quickly.", createdBy:"u2", assets:[
-        {id:"a-xlr",name:"XLR cables",quantity:14,target:56,min:10,location:"FOH case 03",image:null},
-        {id:"a-tape",name:"Gaffer tape",quantity:7,target:18,min:6,location:"Production desk",image:null},
-        {id:"a-batt",name:"AA battery packs",quantity:3,target:16,min:5,location:"Audio lockup",image:null}
-      ]},
-      { id:"cat-rooms", name:"Green rooms", type:"tracked", description:"Unique rooms, keys and current occupants.", createdBy:"u2", fields:[
-        {id:"f-room",label:"Room no.",type:"text",required:true}, {id:"f-floor",label:"Floor",type:"number",required:true}, {id:"f-address",label:"Address",type:"text",required:true},
-        {id:"f-landmark",label:"Landmark",type:"text",required:false}, {id:"f-contact",label:"Key contact",type:"text",required:false}
-      ], assets:[
-        {id:"r303",status:"available",values:{"f-room":"R-303","f-floor":"3","f-address":"West wing","f-landmark":"Opp. freight lift","f-contact":"Aditi · 9982"},context:""},
-        {id:"r306",status:"used",values:{"f-room":"R-306","f-floor":"3","f-address":"West wing","f-landmark":"After Studio B","f-contact":"Maya · 2231"},context:"Dance crew"},
-        {id:"s2",status:"used",values:{"f-room":"Studio 2","f-floor":"1","f-address":"North block","f-landmark":"Beside loading bay","f-contact":"Kabir · 1190"},context:"Sound team"},
-        {id:"r401",status:"available",values:{"f-room":"R-401","f-floor":"4","f-address":"East wing","f-landmark":"Fire stairs","f-contact":"Zoya · 7108"},context:""}
-      ]},
-      { id:"cat-vehicles", name:"Vehicles", type:"tracked", description:"Transport units and their assignment status.", createdBy:"u3", fields:[
-        {id:"f-vehicle",label:"Vehicle",type:"text",required:true}, {id:"f-reg",label:"Registration",type:"text",required:true}, {id:"f-driver",label:"Driver",type:"text",required:false}, {id:"f-phone",label:"Phone",type:"text",required:false}
-      ], assets:[
-        {id:"v1",status:"used",values:{"f-vehicle":"Tempo 01","f-reg":"MP 09 AZ 4431","f-driver":"Rakesh","f-phone":"98870 44210"},context:"Airport run"},
-        {id:"v2",status:"available",values:{"f-vehicle":"Van 03","f-reg":"MP 09 CK 1820","f-driver":"Sonia","f-phone":"97655 32142"},context:""}
-      ]}
-    ],
-    notifications:[
-      {id:"n1",actorId:"u2",kind:"inventory",title:"Aditi issued 6 folding chairs",detail:"Furniture · 42 → 36 on hand",at:ago(2),unread:true},
-      {id:"n2",actorId:"u3",kind:"inventory",title:"Kabir marked R-306 in use",detail:"Green rooms · Dance crew",at:ago(8),unread:true},
-      {id:"n3",actorId:"u4",kind:"import",title:"Maya imported 5 room records",detail:"Green rooms · 5 added, 1 skipped",at:ago(21),unread:false},
-      {id:"n4",actorId:"u6",kind:"people",title:"Zoya joined Northstar '26",detail:"Joined as a member",at:ago(64),unread:false},
-      {id:"n5",actorId:"u1",kind:"inventory",title:"Sachin returned 2 floor lamps",detail:"Furniture · 3 → 5 on hand",at:ago(110),unread:false},
-      {id:"n6",actorId:"u2",kind:"inventory",title:"Aditi marked Van 03 available",detail:"Vehicles · returned from vendor pickup",at:ago(180),unread:false}
-    ]
-  };
-  return { version:3, users:people, events:[northstar] };
-}
-
 function load() {
-  try { db = JSON.parse(localStorage.getItem(STORAGE_KEY)) || createSeed(); } catch { db = createSeed(); }
-  try { session = {...session, ...(JSON.parse(sessionStorage.getItem(SESSION_KEY)) || {})}; } catch {}
-  if (!db.events?.length) db = createSeed();
-  makeCaptcha();
+  try { session.eventId = sessionStorage.getItem(SESSION_KEY) || null; } catch {}
+  db = { version: 4, users: [], events: [] };
 }
-function persist({broadcast=true, rerender=true} = {}) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch (err) { console.warn("Local persistence is unavailable in this preview.", err); }
-  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch (err) { console.warn("Session persistence is unavailable in this preview.", err); }
-  if (broadcast && channel) channel.postMessage({source:tabId, db, at:Date.now()});
+function persist({rerender=true} = {}) {
+  try { if (session.eventId) sessionStorage.setItem(SESSION_KEY, session.eventId); else sessionStorage.removeItem(SESSION_KEY); } catch {}
   ui.lastSync = Date.now();
+  const snapshot = structuredClone(db);
+  if (backend && authUser && session.userId) {
+    writeQueue = writeQueue.then(async () => {
+      try {
+        await backend.saveWorkspace(snapshot, session.userId, session.eventId);
+        ui.dataError = "";
+        ui.lastSync = Date.now();
+      } catch (error) {
+        ui.dataError = error.message || "The change could not be saved.";
+        try {
+          db = await backend.loadWorkspace(authUser);
+          if (!db.events.some(event => event.id === session.eventId)) session.eventId = db.events[0]?.id || null;
+        } catch { /* Keep the last rendered data and show the save error. */ }
+        render();
+      }
+    });
+  }
   if (rerender) render();
+}
+function bindWorkspaceRealtime() {
+  if (unsubscribeWorkspace) unsubscribeWorkspace();
+  unsubscribeWorkspace = null;
+  if (!backend || !authUser || !session.eventId) return;
+  unsubscribeWorkspace = backend.subscribeToWorkspace(session.eventId, async () => {
+    try {
+      await writeQueue;
+      const selected = session.eventId;
+      db = await backend.loadWorkspace(authUser);
+      session.eventId = db.events.some(event => event.id === selected) ? selected : db.events[0]?.id || null;
+      if (session.eventId !== selected) bindWorkspaceRealtime();
+      ui.lastSync = Date.now();
+      render();
+    } catch (error) {
+      ui.dataError = error.message || "A live update could not be loaded. Refresh to try again.";
+      render();
+    }
+  });
 }
 function currentUser() { return db.users.find(u => u.id === session.userId); }
 function currentEvent() { return db.events.find(e => e.id === session.eventId) || db.events[0]; }
@@ -789,7 +773,7 @@ function nowGreeting() { const h = new Date().getHours(); return h < 12 ? "Good 
 function formatTime(ts) { return new Intl.DateTimeFormat(undefined,{hour:"numeric",minute:"2-digit"}).format(new Date(ts)); }
 function timeAgo(ts) { const d = Math.max(0,Date.now()-ts), min=Math.floor(d/60000); if(min<1)return "now"; if(min<60)return `${min}m`; const h=Math.floor(min/60); if(h<24)return `${h}h`; return `${Math.floor(h/24)}d`; }
 function eventInitials(event) { return event.name.replace(/[^a-z0-9 ]/gi,"").split(/\s+/).slice(0,2).map(v=>v[0]).join("").toUpperCase(); }
-function makeCaptcha() { const a=2+Math.floor(Math.random()*8), b=1+Math.floor(Math.random()*7), op=Math.random()>.35?"+":"×"; ui.captcha={question:`${a} ${op} ${b}`,answer:String(op==="+"?a+b:a*b)}; }
+function makeCaptcha() { ui.captchaToken=""; if (window.turnstile && ui.captchaWidgetId !== null) { try { window.turnstile.reset(ui.captchaWidgetId); } catch {} } }
 
 function addActivity(title, detail, kind="inventory", actorId=session.userId) {
   const event=currentEvent(); if(!event) return;
@@ -928,6 +912,7 @@ function render() {
           </div>
         </header>
         <div class="content page-stage">
+          ${ui.dataError?`<p class="error-text" role="alert">${esc(ui.dataError)}</p>`:""}
           ${ui.rolePreview ? `<div class="role-preview" data-reveal><span>${icon("eye","sm")} <strong>Permission preview:</strong> You are seeing this event as ${esc(roleLabel(ui.rolePreview))}. No membership was changed.</span><button class="btn small soft" data-action="clear-role-preview">Return to my role</button></div>` : ""}
           ${renderPage()}
         </div>
@@ -944,7 +929,7 @@ function render() {
 function renderWorkspace() {
   const event=currentEvent(), unread=event.notifications.filter(n=>n.unread).length;
   const stage=app.querySelector(".page-stage");
-  if(stage) stage.innerHTML=`${ui.rolePreview ? `<div class="role-preview" data-reveal><span>${icon("eye","sm")} <strong>Permission preview:</strong> You are seeing this event as ${esc(roleLabel(ui.rolePreview))}. No membership was changed.</span><button class="btn small soft" data-action="clear-role-preview">Return to my role</button></div>` : ""}${renderPage()}`;
+  if(stage) stage.innerHTML=`${ui.dataError?`<p class="error-text" role="alert">${esc(ui.dataError)}</p>`:""}${ui.rolePreview ? `<div class="role-preview" data-reveal><span>${icon("eye","sm")} <strong>Permission preview:</strong> You are seeing this event as ${esc(roleLabel(ui.rolePreview))}. No membership was changed.</span><button class="btn small soft" data-action="clear-role-preview">Return to my role</button></div>` : ""}${renderPage()}`;
   app.querySelectorAll("[data-action='navigate']").forEach(node=>node.classList.toggle("active",node.dataset.page===ui.page));
   const breadcrumb=app.querySelector(".breadcrumb strong"); if(breadcrumb) breadcrumb.textContent=pageTitle(ui.page);
   const activityNav=app.querySelector('.nav-item[data-page="activity"]');
@@ -967,7 +952,10 @@ function renderPage() {
 
 function renderAuth() {
   const login=ui.authTab==="login";
+  const reset=ui.authTab==="reset";
+  const setPassword=new URLSearchParams(location.search).has("reset-password");
   const runArrival=shouldRunArrival();
+  const authMode=setPassword?"password-reset-confirm":reset?"password-reset":login?"login":"signup";
   app.innerHTML=`
     ${runArrival?arrivalMarkup():""}
     <main class="auth-shell ${runArrival?"auth-awaiting":"auth-revealed"}" ${runArrival?"inert":""}>
@@ -977,47 +965,60 @@ function renderAuth() {
           <p class="eyebrow" style="color:#aeb4aa">EVENT INVENTORY, IN MOTION</p>
           <h1><span class="headline-line"><span>Know where</span></span><span class="headline-line"><span><em>everything</em> is.</span></span></h1>
           <p>Before doors open. Before the radio call. Before somebody asks where the spare cables went.</p>
-          <div class="auth-route-card" aria-hidden="true">
-            <span class="eyebrow" style="color:#aeb4aa">TODAY'S ROUTE / LIVE</span>
-            <div class="auth-route-line"></div>
-            <div class="auth-route-labels"><span>RECEIVED</span><span>ON FLOOR</span><span>RETURNED</span></div>
-          </div>
+          <div class="auth-route-card" aria-hidden="true"><span class="eyebrow" style="color:#aeb4aa">A SHARED EVENT WORKSPACE</span><div class="auth-route-line"></div><div class="auth-route-labels"><span>RECEIVED</span><span>ON FLOOR</span><span>RETURNED</span></div></div>
         </div>
-        <div class="mini-ledger" aria-hidden="true">
-          <div class="mini-ledger-row"><span class="time">19:42</span><span>R-306 assigned to Dance crew</span><span class="tick">LIVE</span></div>
-          <div class="mini-ledger-row"><span class="time">19:36</span><span>6 folding chairs issued from Dock B</span><span class="tick">SYNCED</span></div>
-          <div class="mini-ledger-row"><span class="time">19:21</span><span>5 room records imported</span><span class="tick">READY</span></div>
-        </div>
+        <div class="mini-ledger" aria-hidden="true"><div class="mini-ledger-row"><span class="time">LIVE</span><span>Event inventory, shared with your crew</span><span class="tick">SYNCED</span></div><div class="mini-ledger-row"><span class="time">RLS</span><span>Membership controls event access</span><span class="tick">PRIVATE</span></div><div class="mini-ledger-row"><span class="time">AUDIT</span><span>Changes stay in the event ledger</span><span class="tick">READY</span></div></div>
       </section>
-      <section class="auth-panel">
-        <div class="auth-card">
-          <div class="auth-tabs">
-            <button class="auth-tab ${login?"active":""}" data-action="auth-tab" data-tab="login">Sign in</button>
-            <button class="auth-tab ${!login?"active":""}" data-action="auth-tab" data-tab="signup">Make an account</button>
-          </div>
-          <h2>${login?"Welcome back.":"Start in the backroom."}</h2>
-          <p class="intro">${login?"Your event floor is waiting.":"Anyone can create an event or join one with a code."}</p>
-          <form class="auth-form" data-form="${login?"login":"signup"}">
-            ${!login?`<div class="field"><label for="auth-name">Your name</label><input class="input" id="auth-name" name="name" autocomplete="name" placeholder="e.g. Rhea Kapoor" required></div>`:""}
-            <div class="field"><label for="auth-email">Email</label><input class="input" id="auth-email" type="email" name="email" autocomplete="email" value="${login?"hello@backroom.test":""}" placeholder="you@example.com" required></div>
-            <div class="field"><label for="auth-password">Password</label><div class="password-wrap"><input class="input" id="auth-password" type="password" name="password" autocomplete="${login?"current-password":"new-password"}" value="${login?"demo1234":""}" minlength="6" required><button class="password-toggle" type="button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></div></div>
-            <div class="field"><span class="field-label">Human check</span><div class="captcha-ticket"><span class="captcha-code">${esc(ui.captcha.question)}</span><input class="input mono" name="captcha" inputmode="numeric" autocomplete="off" placeholder="Answer" aria-label="Captcha answer" required><button class="btn icon-only soft" type="button" data-action="refresh-captcha" aria-label="New captcha">${icon("rotate")}</button></div></div>
-            ${ui.authError?`<p class="error-text" role="alert">${esc(ui.authError)}</p>`:""}
-            <button class="btn primary" type="submit">${login?"Open event floor":"Create my account"}${icon("arrow")}</button>
-          </form>
-          ${login?`<div class="demo-note"><strong>Demo account is filled in.</strong> Solve the yellow ticket, then open the event floor.</div>`:""}
-        </div>
-        <div class="auth-footer">Prototype workspace · Data stays in this browser</div>
-      </section>
+      <section class="auth-panel"><div class="auth-card">
+        ${!setPassword?`<div class="auth-tabs"><button class="auth-tab ${login&&!reset?"active":""}" data-action="auth-tab" data-tab="login">Sign in</button><button class="auth-tab ${!login&&!reset?"active":""}" data-action="auth-tab" data-tab="signup">Make an account</button></div>`:""}
+        <h2>${setPassword?"Choose a new password.":reset?"Reset your password.":login?"Welcome back.":"Start in the backroom."}</h2>
+        <p class="intro">${setPassword?"Choose a strong password for your account.":reset?"We’ll email you a secure reset link.":login?"Your event floor is waiting.":"Create an account, then start or join an event."}</p>
+        <form class="auth-form" data-form="${authMode}">
+          ${!login&&!reset&&!setPassword?`<div class="field"><label for="auth-name">Your name</label><input class="input" id="auth-name" name="name" autocomplete="name" maxlength="100" placeholder="e.g. Rhea Kapoor" required></div>`:""}
+          ${!setPassword?`<div class="field"><label for="auth-email">Email</label><input class="input" id="auth-email" type="email" name="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></div>`:""}
+          ${!reset?`<div class="field"><label for="auth-password">${setPassword?"New password":"Password"}</label><div class="password-wrap"><input class="input" id="auth-password" type="password" name="password" autocomplete="${login?"current-password":"new-password"}" minlength="12" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></div><p class="help">Use at least 12 characters.</p></div>`:""}
+          ${!login&&!reset&&!setPassword?`<div class="field"><label for="auth-confirm">Confirm password</label><input class="input" id="auth-confirm" type="password" name="confirmPassword" autocomplete="new-password" minlength="12" maxlength="128" required></div>`:""}
+          ${!setPassword?`<div class="field"><span class="field-label">Human verification</span><div id="turnstile-widget" aria-label="Human verification"></div>${!backendConfig?.turnstileSiteKey?`<p class="error-text">Human verification is not configured for this deployment yet.</p>`:""}</div>`:""}
+          ${ui.authError?`<p class="error-text" role="alert">${esc(ui.authError)}</p>`:""}
+          ${ui.authNotice?`<p class="help" role="status">${esc(ui.authNotice)}</p>`:""}
+          ${reset?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Sending…":"Send reset link"} ${icon("arrow")}</button>`:setPassword?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Saving…":"Update password"} ${icon("arrow")}</button>`:`<button class="btn primary" type="submit" ${ui.authBusy||!backendConfig?.turnstileSiteKey?"disabled":""}>${ui.authBusy?"Working…":login?"Open event floor":"Create my account"} ${icon("arrow")}</button>`}
+          ${login?`<button class="btn link" type="button" data-action="password-reset">Forgot password?</button>`:""}
+        </form>
+        ${reset?`<button class="btn link" style="margin-top:16px" data-action="auth-tab" data-tab="login">Back to sign in</button>`:""}
+      </div><div class="auth-footer">Private event workspaces · Supabase authentication</div></section>
     </main>`;
   modalRoot.innerHTML=""; popoverRoot.innerHTML="";
   setupEnhancements();
   if(runArrival)scheduleArrival();
+  if(!setPassword)mountTurnstile();
 }
-
+function mountTurnstile(){
+  const node=document.getElementById("turnstile-widget");
+  if(!node||!backendConfig?.turnstileSiteKey||!window.turnstile)return;
+  try{if(ui.captchaWidgetId!==null){try{window.turnstile.remove(ui.captchaWidgetId);}catch{}ui.captchaWidgetId=null;}ui.captchaWidgetId=window.turnstile.render(node,{sitekey:backendConfig.turnstileSiteKey,theme:"light",callback:token=>{ui.captchaToken=token;ui.authError="";const submit=node.closest("form")?.querySelector('[type="submit"]');if(submit)submit.disabled=false;},"expired-callback":()=>{ui.captchaToken="";},"error-callback":()=>{ui.captchaToken="";}});}catch{ui.authError="Human verification could not be loaded. Refresh the page and try again.";}
+}
+window.onTurnstileLoad=()=>mountTurnstile();
+async function bootstrap(){
+  load();
+  app.innerHTML=`<main class="auth-shell"><section class="auth-panel"><div class="auth-card"><p class="eyebrow">BACKROOM</p><h2>Connecting your workspace…</h2><p class="intro" role="status">Checking your secure sign-in session.</p></div></section></main>`;
+  try{
+    backend=await import("/lib/backend.js");
+    const result=await backend.initializeBackend();backendConfig=result.config;authUser=result.user;
+    if(authUser){session.userId=authUser.id;db=await backend.loadWorkspace(authUser);if(!session.eventId||!db.events.some(event=>event.id===session.eventId))session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();}
+    else{session.userId=null;db={version:4,users:[],events:[]};}
+    if(new URLSearchParams(location.search).has("reset-password")){ui.authTab="reset";}
+    ui.authNotice="";render();
+    const listener=backend.subscribeToAuth((event,user)=>{
+      if(event==="SIGNED_OUT"){if(unsubscribeWorkspace)unsubscribeWorkspace();unsubscribeWorkspace=null;authUser=null;session.userId=null;session.eventId=null;db={version:4,users:[],events:[]};render();}
+      else if(event==="PASSWORD_RECOVERY"){ui.authTab="reset";ui.authNotice="";render();}
+      else if(event==="SIGNED_IN"&&user?.id!==session.userId){authUser=user;session.userId=user.id;backend.loadWorkspace(user).then(workspace=>{db=workspace;session.eventId=workspace.events[0]?.id||null;bindWorkspaceRealtime();render();}).catch(()=>{ui.authError="Your workspace could not be loaded. Refresh and try again.";render();});}
+    });
+    window.addEventListener("beforeunload",()=>{try{listener.data.subscription.unsubscribe();}catch{}});
+  }catch(error){backend=null;ui.authError=error.message||"The workspace backend could not be reached.";backendConfig={turnstileSiteKey:""};db={version:4,users:[],events:[]};render();}
+}
 function renderEventDock() {
   const user=currentUser();
-  app.innerHTML=`<main class="auth-shell"><section class="auth-story">${wordmark()}<div class="auth-copy"><p class="eyebrow" style="color:#aeb4aa">YOUR EVENT DOCK</p><h1>What are we <em>moving</em> today?</h1><p>Create a new event or use the member code your organiser shared.</p></div></section><section class="auth-panel"><div class="auth-card"><p class="eyebrow">SIGNED IN AS ${esc(user.email)}</p><h2>No event selected.</h2><p class="intro">You will see every event you belong to here.</p><div class="stack"><button class="btn signal" data-action="open-modal" data-modal="create-event">${icon("plus")} Start an event</button><button class="btn" data-action="open-modal" data-modal="join-event">${icon("key")} Join with a code</button><button class="btn soft" data-action="logout">${icon("logout")} Sign out</button></div></div></section></main>`;
+  app.innerHTML=`<main class="auth-shell"><section class="auth-story">${wordmark()}<div class="auth-copy"><p class="eyebrow" style="color:#aeb4aa">YOUR EVENT DOCK</p><h1>What are we <em>moving</em> today?</h1><p>Create an event or join one with a code from its creator.</p></div></section><section class="auth-panel"><div class="auth-card"><p class="eyebrow">SIGNED IN AS ${esc(user.email)}</p><h2>No event selected.</h2><p class="intro">You will see every event you belong to here.</p><div class="stack"><button class="btn signal" data-action="open-modal" data-modal="create-event">${icon("plus")} Start an event</button><button class="btn" data-action="open-modal" data-modal="join-event">${icon("key")} Join with a code</button><button class="btn soft" data-action="logout">${icon("logout")} Sign out</button></div></div></section></main>`;
   renderModal();
   setupEnhancements();
 }
@@ -1056,7 +1057,7 @@ function renderOverview() {
     </div>
     <div class="overview-grid">
       <section class="panel" data-reveal><header class="panel-head"><h2>What just moved</h2><button class="btn small soft" data-action="navigate" data-page="activity">Full ledger ${icon("arrow","sm")}</button></header><div class="panel-body">${event.notifications.slice(0,5).map(renderActivityRow).join("")}</div></section>
-      <section class="panel" data-reveal><header class="panel-head"><h2>Attention queue</h2><span class="badge low">${attention.length} open</span></header><div class="panel-body"><div class="attention-list">${attention.slice(0,4).map(a=>`<button class="attention-item" data-action="open-category" data-category="${a.cat}"><span class="attention-mark"></span><span><strong>${esc(a.title)}</strong><p>${esc(a.detail)}</p></span>${icon("chevron","sm")}</button>`).join("") || emptyState("Nothing is misplaced. Nice.","There are no low-stock or active-use flags right now.")}</div><button class="btn soft" style="width:100%;margin-top:12px" data-action="simulate-update">${icon("wifi")} Simulate teammate update</button></div></section>
+      <section class="panel" data-reveal><header class="panel-head"><h2>Attention queue</h2><span class="badge low">${attention.length} open</span></header><div class="panel-body"><div class="attention-list">${attention.slice(0,4).map(a=>`<button class="attention-item" data-action="open-category" data-category="${a.cat}"><span class="attention-mark"></span><span><strong>${esc(a.title)}</strong><p>${esc(a.detail)}</p></span>${icon("chevron","sm")}</button>`).join("") || emptyState("Nothing is misplaced. Nice.","There are no low-stock or active-use flags right now.")}</div><button class="btn soft" style="width:100%;margin-top:12px" data-action="refresh-workspace">${icon("wifi")} Simulate teammate update</button></div></section>
     </div>`;
 }
 function renderActivityRow(n) {
@@ -1070,7 +1071,7 @@ function renderInventory() {
   const cat=categoryById(ui.activeCategoryId);
   return `
     <header class="page-heading" data-reveal><div><p class="eyebrow">THE WORKING LEDGER</p><h1>Inventory</h1><p>Counts for interchangeable stock. Individual records for rooms, vehicles and everything with a name of its own.</p></div><div class="page-actions"><button class="btn" data-action="open-modal" data-modal="import" ${(!isManager()||!event.categories.length)?`disabled title="${!isManager()?"Only creators and admins can import records":"Create a category before importing"}"`:''}>${icon("upload")} Import sheet</button><button class="btn signal" data-action="open-modal" data-modal="category" ${!isManager()?'disabled title="Only creators and admins can create categories"':''}>${icon("plus")} New category</button></div></header>
-    <div class="toolbar" data-reveal><div class="search-wrap">${icon("search")}<input class="input" data-input="inventory-search" value="${esc(ui.search)}" placeholder="Search this category"></div><button class="btn small soft" data-action="simulate-update">${icon("wifi","sm")} Nudge live sync</button></div>
+    <div class="toolbar" data-reveal><div class="search-wrap">${icon("search")}<input class="input" data-input="inventory-search" value="${esc(ui.search)}" placeholder="Search this category"></div><button class="btn small soft" data-action="refresh-workspace">${icon("wifi","sm")} Nudge live sync</button></div>
     ${event.categories.length?`<div class="category-rail" data-reveal>${event.categories.map(c=>`<button class="category-tab ${c.id===ui.activeCategoryId?"active":""}" data-action="select-category" data-category="${c.id}"><span class="category-type">${c.type==="counted"?icon("boxes","sm"):icon("file","sm")} ${c.type==="counted"?"COUNTED":"TRACKED"}</span><strong>${esc(c.name)}</strong><span class="count">${c.assets.length} ${c.assets.length===1?"entry":"entries"}</span></button>`).join("")}</div>${cat?renderCategory(cat):""}`:emptyState("No categories yet.","Create a counted stock list or a tracked-record register to get moving.",isManager()?`<button class="btn signal" data-action="open-modal" data-modal="category">${icon("plus")} Create the first category</button>`:"")}`;
 }
 function renderCategory(cat) {
@@ -1121,12 +1122,12 @@ function renderPerson(member) {
 function renderAccess() {
   const event=currentEvent(), creator=isCreator();
   const joinVisible=ui.revealedCodes.join, adminVisible=ui.revealedCodes.admin;
-  return `<header class="page-heading" data-reveal><div><p class="eyebrow">CODES & PERMISSIONS</p><h1>Event access</h1><p>The member code opens the door. The admin code changes what somebody can manage.</p></div></header>${creator?`<div class="access-grid"><article class="code-card" data-reveal><span class="badge counted">Member code</span><h2>Invite the crew</h2><p>Anyone with an account can join this event as a member using this code.</p><div class="big-code ${joinVisible?"":"masked"}">${joinVisible?esc(event.joinCode):"JOIN-••••-••"}</div><div class="code-actions"><button class="btn soft" data-action="reveal-code" data-kind="join">${icon(joinVisible?"eye":"lock")} ${joinVisible?"Hide":"Reveal"}</button><button class="btn primary" data-action="copy-code" data-code="${esc(event.joinCode)}">${icon("copy")} Copy code</button><button class="btn soft" data-action="confirm-regenerate" data-kind="join">${icon("rotate")} Replace</button></div></article><article class="code-card admin" data-reveal><span class="badge tracked">Admin code</span><h2>Hand over controls</h2><p>An existing member can enter this code to become an admin. Share it carefully.</p><div class="big-code ${adminVisible?"":"masked"}">${adminVisible?esc(event.adminCode):"ADMIN-••••-••"}</div><div class="code-actions"><button class="btn soft" data-action="reveal-code" data-kind="admin">${icon(adminVisible?"eye":"lock")} ${adminVisible?"Hide":"Reveal"}</button><button class="btn primary" style="background:var(--paper-light);color:var(--ink)" data-action="copy-code" data-code="${esc(event.adminCode)}">${icon("copy")} Copy code</button><button class="btn soft" data-action="confirm-regenerate" data-kind="admin">${icon("rotate")} Replace</button></div></article></div><div class="permission-note" data-reveal style="margin-top:15px">${icon("shield","lg")}<div><h3>Only you can see or replace these codes.</h3><p>Replacing a code invalidates the old one immediately. Existing members and admins keep their roles.</p></div></div>`:`<div class="permission-note" data-reveal>${icon("lock","lg")}<div><h3>Codes live with the creator.</h3><p>For safety, only ${esc(userById(event.creatorId).name)} can view or replace this event’s join and admin codes.</p></div></div>${actualRole()==="member"?`<section class="panel" data-reveal style="margin-top:15px;max-width:620px"><header class="panel-head"><h2>Have the admin code?</h2></header><form class="panel-body stack" data-form="admin-code"><p class="help">Enter the code shared by the creator. Your role changes immediately.</p><input class="input mono" name="code" placeholder="ADMIN-CODE" required><button class="btn primary" type="submit">Become an admin ${icon("arrow")}</button></form></section>`:""}`}`;
+  return `<header class="page-heading" data-reveal><div><p class="eyebrow">CODES & PERMISSIONS</p><h1>Event access</h1><p>The member code opens the door. The admin code changes what somebody can manage.</p></div></header>${creator?`<div class="access-grid"><article class="code-card" data-reveal><span class="badge counted">Member code</span><h2>Invite the crew</h2><p>Anyone with an account can join this event as a member using this code.</p><div class="big-code ${joinVisible?"":"masked"}">${joinVisible&&event.joinCode?esc(event.joinCode):event.joinCode?"JOIN-••••-••":"No active code shown"}</div><div class="code-actions"><button class="btn soft" data-action="${event.joinCode?"reveal-code":"confirm-regenerate"}" data-kind="join">${icon(joinVisible?"eye":"lock")} ${event.joinCode?(joinVisible?"Hide":"Reveal"):"Generate code"}</button><button class="btn primary" data-action="copy-code" data-code="${esc(event.joinCode||"")}" ${!event.joinCode?"disabled":""}>${icon("copy")} Copy code</button><button class="btn soft" data-action="confirm-regenerate" data-kind="join">${icon("rotate")} Replace</button></div></article><article class="code-card admin" data-reveal><span class="badge tracked">Admin code</span><h2>Hand over controls</h2><p>An existing member can enter this code to become an admin. Share it carefully.</p><div class="big-code ${adminVisible?"":"masked"}">${adminVisible&&event.adminCode?esc(event.adminCode):event.adminCode?"ADMIN-••••-••":"No active code shown"}</div><div class="code-actions"><button class="btn soft" data-action="${event.adminCode?"reveal-code":"confirm-regenerate"}" data-kind="admin">${icon(adminVisible?"eye":"lock")} ${event.adminCode?(adminVisible?"Hide":"Reveal"):"Generate code"}</button><button class="btn primary" style="background:var(--paper-light);color:var(--ink)" data-action="copy-code" data-code="${esc(event.adminCode||"")}" ${!event.adminCode?"disabled":""}>${icon("copy")} Copy code</button><button class="btn soft" data-action="confirm-regenerate" data-kind="admin">${icon("rotate")} Replace</button></div></article></div><div class="permission-note" data-reveal style="margin-top:15px">${icon("shield","lg")}<div><h3>Only you can see or replace these codes.</h3><p>Replacing a code invalidates the old one immediately. Existing members and admins keep their roles.</p></div></div>`:`<div class="permission-note" data-reveal>${icon("lock","lg")}<div><h3>Codes live with the creator.</h3><p>For safety, only ${esc(userById(event.creatorId).name)} can view or replace this event’s join and admin codes.</p></div></div>${actualRole()==="member"?`<section class="panel" data-reveal style="margin-top:15px;max-width:620px"><header class="panel-head"><h2>Have the admin code?</h2></header><form class="panel-body stack" data-form="admin-code"><p class="help">Enter the code shared by the creator. Your role changes immediately.</p><input class="input mono" name="code" placeholder="ADMIN-CODE" required><button class="btn primary" type="submit">Become an admin ${icon("arrow")}</button></form></section>`:""}`}`;
 }
 
 function renderSettings() {
   const event=currentEvent(), creator=isCreator();
-  return `<header class="page-heading" data-reveal><div><p class="eyebrow">EVENT DETAILS</p><h1>Settings</h1><p>The practical particulars your crew sees around the workspace.</p></div></header><div class="settings-grid"><section class="panel" data-reveal><header class="panel-head"><h2>Event details</h2><span class="badge">${esc(roleLabel(role()))}</span></header><form class="panel-body settings-form" data-form="event-settings"><div class="field"><label>Event name</label><input class="input" name="name" value="${esc(event.name)}" ${!isManager()?"disabled":""} required></div><div class="field"><label>Date</label><input class="input" name="date" value="${esc(event.date)}" ${!isManager()?"disabled":""}></div><div class="field span-2"><label>Location</label><input class="input" name="location" value="${esc(event.location)}" ${!isManager()?"disabled":""}></div><div class="field span-2"><label>Working note</label><textarea class="textarea" name="note" ${!isManager()?"disabled":""}>${esc(event.note||"")}</textarea></div>${isManager()?`<div class="span-2"><button class="btn primary" type="submit">Save event details</button></div>`:""}</form></section><aside class="danger-zone" data-reveal><h3>Delete this event</h3><p>This removes the event, its categories, inventory, activity and memberships from this workspace. It cannot be undone.</p><button class="btn danger" data-action="confirm-delete-event" ${!creator?'disabled title="Only the event creator can delete it"':''}>${icon("trash")} Delete ${esc(event.name)}</button>${!creator?`<p style="margin:10px 0 0">Only the creator can do this.</p>`:""}</aside></div>`;
+  return `<header class="page-heading" data-reveal><div><p class="eyebrow">EVENT DETAILS</p><h1>Settings</h1><p>The practical particulars your crew sees around the workspace.</p></div></header><div class="settings-grid"><section class="panel" data-reveal><header class="panel-head"><h2>Event details</h2><span class="badge">${esc(roleLabel(role()))}</span></header><form class="panel-body settings-form" data-form="event-settings"><div class="field"><label>Event name</label><input class="input" name="name" value="${esc(event.name)}" ${!isManager()?"disabled":""} required></div><div class="field"><label>Date</label><input class="input" type="date" name="date" value="${esc(event.startDate||"")}" ${!isManager()?"disabled":""}></div><div class="field span-2"><label>Location</label><input class="input" name="location" value="${esc(event.location)}" ${!isManager()?"disabled":""}></div><div class="field span-2"><label>Working note</label><textarea class="textarea" name="note" ${!isManager()?"disabled":""}>${esc(event.note||"")}</textarea></div>${isManager()?`<div class="span-2"><button class="btn primary" type="submit">Save event details</button></div>`:""}</form></section><aside class="danger-zone" data-reveal><h3>Delete this event</h3><p>This removes the event, its categories, inventory, activity and memberships from this workspace. It cannot be undone.</p><button class="btn danger" data-action="confirm-delete-event" ${!creator?'disabled title="Only the event creator can delete it"':''}>${icon("trash")} Delete ${esc(event.name)}</button>${!creator?`<p style="margin:10px 0 0">Only the creator can do this.</p>`:""}</aside></div>`;
 }
 
 function renderPopover() {
@@ -1136,7 +1137,7 @@ function renderPopover() {
     const memberships=db.events.filter(e=>e.members.some(m=>m.userId===session.userId));
     popoverRoot.innerHTML=`<div class="popover event-menu"><div class="popover-head"><strong>Event dock</strong><button class="modal-close" data-action="close-popover">${icon("x","sm")}</button></div><div class="popover-body">${memberships.map(e=>{const r=e.members.find(m=>m.userId===session.userId)?.role;return `<button class="event-option ${e.id===session.eventId?"active":""}" data-action="switch-event" data-event="${e.id}"><span class="event-glyph">${esc(eventInitials(e))}</span><span><strong>${esc(e.name)}</strong><small>${esc(roleLabel(r))} · ${esc(e.location)}</small></span>${e.id===session.eventId?icon("check","sm"):""}</button>`;}).join("")}</div><div class="menu-actions"><button class="btn small signal" data-action="open-modal" data-modal="create-event">${icon("plus","sm")} Create</button><button class="btn small" data-action="open-modal" data-modal="join-event">${icon("key","sm")} Join</button></div></div>`;
   } else if(ui.popover==="profile") {
-    popoverRoot.innerHTML=`<div class="popover profile-menu"><div class="profile-section"><p class="eyebrow">PREVIEW PERMISSIONS</p>${["creator","admin","member"].map(r=>`<button class="menu-row" data-action="preview-role" data-role="${r}"><span class="stamp" style="color:${r==="creator"?"#aa372f":"#496353"}">${r}</span><span>${r===actualRole()?"My current role":`View as ${r}`}</span></button>`).join("")}</div><div class="profile-section"><button class="menu-row replay-arrival-mark" data-action="replay-arrival">${icon("arrow")} Replay arrival</button><button class="menu-row" data-action="reset-demo">${icon("rotate")} Reset demo data</button><button class="menu-row" data-action="logout">${icon("logout")} Sign out</button></div></div>`;
+    popoverRoot.innerHTML=`<div class="popover profile-menu"><div class="profile-section"><p class="eyebrow">PREVIEW PERMISSIONS</p>${["creator","admin","member"].map(r=>`<button class="menu-row" data-action="preview-role" data-role="${r}"><span class="stamp" style="color:${r==="creator"?"#aa372f":"#496353"}">${r}</span><span>${r===actualRole()?"My current role":`View as ${r}`}</span></button>`).join("")}</div><div class="profile-section"><button class="menu-row replay-arrival-mark" data-action="replay-arrival">${icon("arrow")} Replay arrival</button><button class="menu-row" data-action="logout">${icon("logout")} Sign out</button></div></div>`;
   } else if(ui.popover==="notifications") {
     const list=event.notifications.slice(0,6);
     popoverRoot.innerHTML=`<div class="popover notifications-pop"><div class="popover-head"><strong>What moved</strong><button class="text-btn tiny" data-action="mark-read">Mark all read</button></div><div class="popover-body">${list.map(n=>`<div class="notification-item ${n.unread?"unread":""}"><span class="activity-icon ${n.kind}">${icon(n.kind==="people"?"users":n.kind==="import"?"upload":"pulse","sm")}</span><span><p>${esc(n.title)}</p><time>${timeAgo(n.at)} · ${esc(n.detail)}</time></span></div>`).join("")||emptyState("Nothing new.","The event floor is quiet.")}</div><div class="menu-actions" style="grid-template-columns:1fr"><button class="btn small" data-action="navigate" data-page="activity">Open full ledger</button></div></div>`;
@@ -1156,11 +1157,11 @@ function renderModal() {
   let body="", title="", subtitle="", wide=false, foot="";
   if(name==="create-event") {
     title="Start an event";subtitle="You become its sole creator.";
-    body=`<form id="modal-form" class="stack" data-form="create-event"><div class="field"><label>Event name</label><input class="input" name="name" placeholder="e.g. Meridian Summit '27" required autofocus></div><div class="field"><label>Location</label><input class="input" name="location" placeholder="Venue or city"></div><div class="field"><label>Date</label><input class="input" name="date" placeholder="e.g. 6–8 February 2027"></div><div class="field"><label>Working note <span class="muted">(optional)</span></label><textarea class="textarea" name="note" placeholder="What is the crew preparing for?"></textarea></div></form>`;
+    body=`<form id="modal-form" class="stack" data-form="create-event"><div class="field"><label>Event name</label><input class="input" name="name" placeholder="e.g. Meridian Summit '27" required autofocus></div><div class="field"><label>Location</label><input class="input" name="location" placeholder="Venue or city"></div><div class="field"><label>Date</label><input class="input" type="date" name="date"></div><div class="field"><label>Working note <span class="muted">(optional)</span></label><textarea class="textarea" name="note" placeholder="What is the crew preparing for?"></textarea></div></form>`;
     foot=`<button class="btn soft" data-action="close-modal">Cancel</button><button class="btn signal" type="submit" form="modal-form">Create event ${icon("arrow")}</button>`;
   } else if(name==="join-event") {
     title="Join an event";subtitle="Use the member code shared by its creator.";
-    body=`<form id="modal-form" class="stack" data-form="join-event"><div class="field"><label>Member code</label><input class="input mono" name="code" placeholder="EVENT-CODE" autocomplete="off" style="font-size:19px;letter-spacing:.09em;text-transform:uppercase" required autofocus></div><p class="help">Try <span class="mono">N26-MOSS-7K</span> for the seeded event.</p></form>`;
+    body=`<form id="modal-form" class="stack" data-form="join-event"><div class="field"><label>Member code</label><input class="input mono" name="code" placeholder="EVENT-CODE" autocomplete="off" style="font-size:19px;letter-spacing:.09em;text-transform:uppercase" required autofocus></div><p class="help">Ask the event creator for an active access code.</p></form>`;
     foot=`<button class="btn soft" data-action="close-modal">Cancel</button><button class="btn primary" type="submit" form="modal-form">Join event ${icon("arrow")}</button>`;
   } else if(name==="category") {
     const d=ui.categoryDraft;title="New inventory category";subtitle="Choose how records in this category behave.";wide=true;
@@ -1203,41 +1204,58 @@ function syncCategoryDraftFromDom() {
 async function handleSubmit(form) {
   const data=Object.fromEntries(new FormData(form));
   const type=form.dataset.form;
-  if(type==="login") {
-    if(String(data.captcha).trim()!==ui.captcha.answer){ui.authError="That human-check answer does not match. A fresh ticket is ready.";makeCaptcha();render();return;}
-    const user=db.users.find(u=>u.email.toLowerCase()===String(data.email).trim().toLowerCase()&&u.password===data.password);
-    if(!user){ui.authError="Email or password is incorrect.";makeCaptcha();render();return;}
-    session.userId=user.id; const evt=db.events.find(e=>e.members.some(m=>m.userId===user.id));session.eventId=evt?.id||null;ui.authError="";persist();toast("Event floor opened");
-  } else if(type==="signup") {
-    if(String(data.captcha).trim()!==ui.captcha.answer){ui.authError="That human-check answer does not match. Try the new ticket.";makeCaptcha();render();return;}
-    const email=String(data.email).trim().toLowerCase();
-    if(db.users.some(u=>u.email.toLowerCase()===email)){ui.authError="An account already uses this email.";makeCaptcha();render();return;}
-    const user={id:id("u"),name:String(data.name).trim(),email,password:data.password,color:"#dcea9b"};db.users.push(user);session.userId=user.id;session.eventId=null;ui.authError="";persist();toast("Account created");
+  if(type==="login" || type==="signup" || type==="password-reset" || type==="password-reset-confirm") {
+    ui.authError="";ui.authNotice="";
+    if(type==="password-reset-confirm"){
+      if(String(data.password||"").length<12||String(data.password).length>128){ui.authError="Use a password between 12 and 128 characters.";render();return;}
+      if(String(data.password)!==String(data.confirmPassword)){ui.authError="Passwords do not match.";render();return;}
+      ui.authBusy=true;render();try{await backend.updatePassword(String(data.password));history.replaceState({},"",location.pathname);ui.authTab="login";ui.authNotice="Your password was updated. Sign in with your new password.";ui.authBusy=false;render();}catch(error){ui.authBusy=false;ui.authError=error.message;render();}return;
+    }
+    const email=String(data.email||"").trim().toLowerCase();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254){ui.authError="Enter a valid email address.";render();return;}
+    if(type==="signup"){
+      if(String(data.name||"").trim().length<1||String(data.name).trim().length>100){ui.authError="Enter a name of 1 to 100 characters.";render();return;}
+      if(String(data.password||"").length<12||String(data.password).length>128){ui.authError="Use a password between 12 and 128 characters.";render();return;}
+      if(String(data.password)!==String(data.confirmPassword)){ui.authError="Passwords do not match.";render();return;}
+    }
+    if(type!=="password-reset"&&!ui.captchaToken){ui.authError="Complete the human verification first.";render();return;}
+    if(type==="password-reset"&&!ui.captchaToken){ui.authError="Complete the human verification first.";render();return;}
+    ui.authBusy=true;render();
+    try{
+      await backend.verifyCaptcha(ui.captchaToken);
+      if(type==="login"){
+        authUser=await backend.signIn({email,password:String(data.password),captchaToken:ui.captchaToken});session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;
+      }else if(type==="signup"){
+        const result=await backend.signUp({name:String(data.name).trim(),email,password:String(data.password),captchaToken:ui.captchaToken});
+        if(result.session&&result.user){authUser=result.user;session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;}else{ui.authNotice="Check your email for a verification link, then return here to sign in.";ui.authTab="login";}
+      }else{
+        await backend.requestPasswordReset(email,ui.captchaToken);ui.authNotice="If this account exists, a reset link is on its way.";
+      }
+      ui.authError="";ui.authBusy=false;makeCaptcha();render();
+    }catch(error){ui.authBusy=false;ui.authError=error.message||"The request could not be completed.";makeCaptcha();render();}
+    return;
   } else if(type==="create-event") {
-    const event={id:id("evt"),name:String(data.name).trim(),short:"",location:String(data.location||"Venue to be confirmed"),date:String(data.date||"Date to be confirmed"),note:String(data.note||""),creatorId:session.userId,joinCode:code("JOIN"),adminCode:code("ADMIN"),createdAt:Date.now(),members:[{userId:session.userId,role:"creator",online:true,lastSeen:Date.now()}],categories:[],notifications:[]};
-    db.events.push(event);session.eventId=event.id;ui.page="overview";ui.activeCategoryId=null;ui.rolePreview=null;ui.modal=null;persist();toast(`${event.name} is ready`);
+    const name=String(data.name||"").trim();if(!name||name.length>120){ui.modal={...ui.modal,error:"Event name must be between 1 and 120 characters."};renderModal();return;}
+    const event=await backend.createEvent({name,location:String(data.location||"").trim(),date:String(data.date||"")||null,note:String(data.note||"").trim()},session.userId);
+    db.events.push(event);session.eventId=event.id;ui.page="overview";ui.activeCategoryId=null;ui.rolePreview=null;ui.modal=null;ui.revealedCodes={join:true,admin:true};persist();
   } else if(type==="join-event") {
-    const entered=String(data.code).trim().toUpperCase(); const event=db.events.find(e=>e.joinCode.toUpperCase()===entered);
-    if(!event){toast("That member code is not active","error");return;}
-    const existing=event.members.find(m=>m.userId===session.userId);
-    if(!existing){event.members.push({userId:session.userId,role:"member",online:true,lastSeen:Date.now()});session.eventId=event.id;ui.rolePreview=null;event.notifications.unshift({id:id("n"),actorId:session.userId,kind:"people",title:`${currentUser().name} joined ${event.name}`,detail:"Joined as a member",at:Date.now(),unread:true});}
-    else session.eventId=event.id;
-    ui.modal=null;ui.page="overview";persist();toast(existing?"Switched to that event":"You joined as a member");
+    const codeValue=String(data.code||"").trim();if(codeValue.length<12||codeValue.length>64){ui.modal={...ui.modal,error:"Enter a valid event access code."};renderModal();return;}
+    const membership=await backend.joinEvent(codeValue,false);authUser=(await backend.getClient().auth.getUser()).data.user;db=await backend.loadWorkspace(authUser);session.userId=authUser.id;session.eventId=membership.event_id;ui.rolePreview=null;ui.modal=null;ui.page="overview";persist();
   } else if(type==="category") {
     syncCategoryDraftFromDom();const d=ui.categoryDraft;const name=String(d.name||"").trim();if(!name){toast("Give the category a name","error");return;}
     if(d.type==="tracked") {const labels=d.fields.map(f=>f.label.trim().toLowerCase());if(d.fields.some(f=>!f.label.trim())||new Set(labels).size!==labels.length){toast("Field names must be filled and unique","error");return;}}
     const cat={id:id("cat"),name,type:d.type,description:String(d.description||"").trim(),createdBy:session.userId,assets:[]};if(d.type==="tracked")cat.fields=d.fields.map(f=>({...f,label:f.label.trim()}));currentEvent().categories.push(cat);ui.activeCategoryId=cat.id;addActivity(`${currentUser().name} created ${name}`,`${d.type==="counted"?"Counted stock":"Tracked records"} · new category`,"inventory");ui.modal=null;persist();toast(`${name} created`);
   } else if(type==="asset") {
     const cat=categoryById(ui.activeCategoryId);if(!cat)return;
-    if(cat.type==="counted") {const q=Number(data.quantity),min=Number(data.min||0),target=Number(data.target||Math.max(1,q));if(!Number.isInteger(q)||q<0){toast("Quantity must be a whole number, zero or above","error");return;}let image=null;const file=form.querySelector('input[type="file"]')?.files[0];if(file){if(file.size>1.5*1024*1024){toast("Picture must be under 1.5 MB","error");return;}image=await readFileDataURL(file);}const asset={id:id("asset"),name:String(data.name).trim(),quantity:q,min:Math.max(0,min),target:Math.max(1,target),location:String(data.location||""),image};cat.assets.push(asset);addActivity(`${currentUser().name} added ${asset.name}`,`${cat.name} · starting count ${q}`,"inventory");}
+    if(cat.type==="counted") {const q=Number(data.quantity),min=Number(data.min||0),target=Number(data.target||Math.max(1,q));if(!Number.isInteger(q)||q<0){toast("Quantity must be a whole number, zero or above","error");return;}let image=null,imagePath=null;const file=form.querySelector('input[type="file"]')?.files[0];if(file){const uploaded=await backend.uploadImage(currentEvent().id,file);image=uploaded.url;imagePath=uploaded.path;}const asset={id:id(),name:String(data.name).trim(),quantity:q,min:Math.max(0,min),target:Math.max(1,target),location:String(data.location||""),image,imagePath,version:1};cat.assets.push(asset);addActivity(`${currentUser().name} added ${asset.name}`,`${cat.name} · starting count ${q}`,"inventory");}
     else {const values={};let missing=false;cat.fields.forEach(f=>{const val=String(data[`field-${f.id}`]||"").trim();values[f.id]=val;if(f.required&&!val)missing=true;});if(missing){toast("Fill every required field","error");return;}const asset={id:id("record"),status:data.status==="used"?"used":"available",values,context:String(data.context||"")};cat.assets.push(asset);addActivity(`${currentUser().name} added ${recordTitle(cat,asset)}`,`${cat.name} · ${asset.status==="used"?"in use":"available"}`,"inventory");}
     ui.modal=null;persist();toast("Inventory updated");
   } else if(type==="status-context") {
     const cat=categoryById(ui.activeCategoryId),asset=cat.assets.find(a=>a.id===ui.modal.assetId);asset.status="used";asset.context=String(data.context||"").trim();addActivity(`${currentUser().name} marked ${recordTitle(cat,asset)} in use`,`${cat.name}${asset.context?` · ${asset.context}`:""}`,"inventory");ui.modal=null;withTransition(()=>persist());toast("Moved to In use");
   } else if(type==="admin-code") {
-    const event=currentEvent();if(String(data.code).trim().toUpperCase()!==event.adminCode.toUpperCase()){toast("That admin code is not active","error");return;}const member=event.members.find(m=>m.userId===session.userId);if(member&&member.role==="member"){member.role="admin";addActivity(`${currentUser().name} became an admin`,`Access code accepted`,"people");persist();toast("Admin controls unlocked");}
+    const membership=await backend.joinEvent(String(data.code||"").trim(),true);authUser=(await backend.getClient().auth.getUser()).data.user;db=await backend.loadWorkspace(authUser);session.userId=authUser.id;session.eventId=membership.event_id;ui.page="overview";persist();
   } else if(type==="event-settings") {
-    const event=currentEvent();event.name=String(data.name).trim();event.date=String(data.date||"");event.location=String(data.location||"");event.note=String(data.note||"");addActivity(`${currentUser().name} updated event details`,event.name,"people");persist();toast("Event details saved");
+    const event=currentEvent();event.name=String(data.name).trim();event.startDate=String(data.date||"")||null;event.endDate=event.startDate;event.date=event.startDate?new Date(`${event.startDate}T00:00:00`).toLocaleDateString():"";event.location=String(data.location||"").trim();event.note=String(data.note||"").trim();addActivity(`${currentUser().name} updated event details`,event.name,"people");persist();
   }
 }
 
@@ -1245,12 +1263,12 @@ function readFileDataURL(file){return new Promise((resolve,reject)=>{const r=new
 function mutateQuantity(assetId,next) {
   const cat=categoryById(ui.activeCategoryId),asset=cat?.assets.find(a=>a.id===assetId);if(!asset)return;const before=asset.quantity;const value=Number(next);if(!Number.isInteger(value)||value<0){toast("Count must be a whole number, zero or above","error");render();return;}if(value===before)return;asset.quantity=value;ui.changedAsset=asset.id;addActivity(`${currentUser().name} changed ${asset.name}`,`${cat.name} · ${before} → ${value} on hand`,"inventory");persist();toast(`${asset.name}: ${before} → ${value}`);setTimeout(()=>{ui.changedAsset=null;},900);
 }
-function runConfirm() {
+async function runConfirm() {
   const c=ui.modal.confirm;const event=currentEvent();
   if(c.type==="delete-category") {const cat=categoryById(c.categoryId);event.categories=event.categories.filter(v=>v.id!==c.categoryId);addActivity(`${currentUser().name} deleted ${cat.name}`,`${cat.assets.length} records removed with the category`,"inventory");ui.activeCategoryId=event.categories[0]?.id||null;}
   if(c.type==="delete-asset") {const cat=categoryById(c.categoryId),asset=cat.assets.find(a=>a.id===c.assetId);const name=cat.type==="counted"?asset.name:recordTitle(cat,asset);cat.assets=cat.assets.filter(a=>a.id!==c.assetId);addActivity(`${currentUser().name} deleted ${name}`,`${cat.name} · record removed`,"inventory");}
   if(c.type==="remove-member") {const user=userById(c.userId);event.members=event.members.filter(m=>m.userId!==c.userId);addActivity(`${currentUser().name} removed ${user.name}`,`Access to ${event.name} removed`,"people");}
-  if(c.type==="regenerate") {if(c.kind==="join")event.joinCode=code("JOIN");else event.adminCode=code("ADMIN");addActivity(`${currentUser().name} replaced the ${c.kind} code`,`The previous code is no longer active`,"people");}
+  if(c.type==="regenerate") {const fresh=await backend.rotateCode(event.id,c.kind==="admin");if(c.kind==="join")event.joinCode=fresh;else event.adminCode=fresh;ui.revealedCodes[c.kind]=true;addActivity(`${currentUser().name} replaced the ${c.kind} code`,`The previous code is no longer active`,"people");}
   if(c.type==="delete-event") {db.events=db.events.filter(e=>e.id!==event.id);const next=db.events.find(e=>e.members.some(m=>m.userId===session.userId));session.eventId=next?.id||null;ui.page="overview";ui.rolePreview=null;ui.modal=null;persist();toast(`${event.name} was deleted`);return;}
   ui.modal=null;persist();toast(c.success||"Change applied");
 }
@@ -1314,9 +1332,9 @@ document.addEventListener("click",async e=>{
   else if(action==="open-modal"){if(el.disabled)return;openModal(el.dataset.modal);}
   else if(action==="close-modal"){closeModal();}
   else if(action==="overlay-close"&&e.target===el){closeModal();}
-  else if(action==="switch-event"){withTransition(()=>{session.eventId=el.dataset.event;ui.popover=null;ui.rolePreview=null;ui.page="overview";ui.activeCategoryId=currentEvent().categories[0]?.id||null;persist({broadcast:false});});}
-  else if(action==="logout"){session.userId=null;session.eventId=null;ui.popover=null;ui.modal=null;ui.rolePreview=null;makeCaptcha();persist({broadcast:false});}
-  else if(action==="reset-demo"){db=createSeed();session.userId="u1";session.eventId="evt-northstar";ui={...ui,page:"overview",activeCategoryId:"cat-furniture",popover:null,modal:null,rolePreview:null,search:"",lastSync:Date.now()};persist();toast("Demo restored to opening state");}
+  else if(action==="switch-event"){withTransition(()=>{session.eventId=el.dataset.event;bindWorkspaceRealtime();ui.popover=null;ui.rolePreview=null;ui.page="overview";ui.activeCategoryId=currentEvent().categories[0]?.id||null;persist({broadcast:false});});}
+  else if(action==="logout"){await backend.signOut();authUser=null;session.userId=null;session.eventId=null;db={version:4,users:[],events:[]};ui.popover=null;ui.modal=null;ui.rolePreview=null;makeCaptcha();render();}
+  else if(action==="password-reset"){ui.authTab="reset";ui.authError="";ui.authNotice="";render();}
   else if(action==="preview-role"){ui.rolePreview=el.dataset.role===actualRole()?null:el.dataset.role;ui.popover=null;render();}
   else if(action==="clear-role-preview"){ui.rolePreview=null;render();}
   else if(action==="select-category"){withTransition(()=>{ui.activeCategoryId=el.dataset.category;ui.search="";render();});}
@@ -1333,21 +1351,19 @@ document.addEventListener("click",async e=>{
   else if(action==="reveal-code"){ui.revealedCodes[el.dataset.kind]=!ui.revealedCodes[el.dataset.kind];withTransition(render);}
   else if(action==="copy-code"){const original=el.innerHTML;try{await navigator.clipboard.writeText(el.dataset.code);el.innerHTML=`${icon("check")} Copied`;toast("Code copied to clipboard");setTimeout(()=>{if(el.isConnected)el.innerHTML=original;},1300);}catch{toast(`Code: ${el.dataset.code}`);}}
   else if(action==="confirm-regenerate"){const kind=el.dataset.kind;ui.modal={name:"confirm",title:`Replace the ${kind} code?`,message:`The old ${kind} code stops working immediately. Existing people keep their access.`,confirmLabel:"Replace code",danger:false,confirm:{type:"regenerate",kind,success:"A fresh code is active"}};renderModal();}
-  else if(action==="confirm-delete-event"){const ev=currentEvent();ui.modal={name:"confirm",title:`Delete ${ev.name}?`,message:"This permanently removes its inventory, people and activity from this prototype.",confirmLabel:"Delete event",danger:true,requireText:ev.name,confirm:{type:"delete-event"}};renderModal();}
-  else if(action==="run-confirm"){runConfirm();}
-  else if(action==="mark-read"){currentEvent().notifications.forEach(n=>n.unread=false);ui.popover=null;persist();toast("Activity marked as read");}
+  else if(action==="confirm-delete-event"){const ev=currentEvent();ui.modal={name:"confirm",title:`Delete ${ev.name}?`,message:"This permanently removes its inventory, people and activity from the event.",confirmLabel:"Delete event",danger:true,requireText:ev.name,confirm:{type:"delete-event"}};renderModal();}
+  else if(action==="run-confirm"){await runConfirm();}
+  else if(action==="mark-read"){await backend.markNotificationsRead(currentEvent());ui.popover=null;persist();}
   else if(action==="activity-filter"){withTransition(()=>{ui.activityFilter=el.dataset.filter;render();});}
-  else if(action==="simulate-update"){const event=currentEvent(),cat=event.categories.find(c=>c.type==="counted"&&c.assets.length),actor=event.members.map(m=>m.userId).filter(uid=>uid!==session.userId)[Math.floor(Math.random()*Math.max(1,event.members.length-1))]||session.userId;if(cat){const asset=cat.assets[Math.floor(Math.random()*cat.assets.length)],before=asset.quantity,delta=Math.random()>.5?1:-1;asset.quantity=Math.max(0,before+delta);event.notifications.unshift({id:id("n"),actorId:actor,kind:"inventory",title:`${userById(actor).name} ${delta>0?"returned":"issued"} 1 ${asset.name}`,detail:`${cat.name} · ${before} → ${asset.quantity} on hand`,at:Date.now(),unread:true});ui.lastSync=Date.now();persist();toast("A teammate update arrived live");}}
+  else if(action==="refresh-workspace"){authUser=(await backend.getClient().auth.getUser()).data.user;const selected=session.eventId;db=await backend.loadWorkspace(authUser);session.eventId=db.events.some(event=>event.id===selected)?selected:db.events[0]?.id||null;ui.lastSync=Date.now();render();}
   else if(action==="clear-import"){ui.importData={...ui.importData,fileName:"",rows:[],headers:[],parsed:[],error:""};renderModal();}
   else if(action==="commit-import"){const data=ui.importData,cat=categoryById(data.categoryId),items=data.parsed.filter(r=>r.valid).map(r=>r.item);let added=0,updated=0;if(cat.type==="counted"){items.forEach(item=>{const existing=cat.assets.find(a=>a.name.toLowerCase()===item.name.toLowerCase());if(existing){Object.assign(existing,{quantity:item.quantity,target:item.target,min:item.min,location:item.location||existing.location});updated++;}else{cat.assets.push(item);added++;}});}else{items.forEach(item=>{const first=cat.fields[0],duplicate=cat.assets.some(a=>String(a.values[first?.id]||"").toLowerCase()===String(item.values[first?.id]||"").toLowerCase());if(!duplicate){cat.assets.push(item);added++;}});}addActivity(`${currentUser().name} imported ${added+updated} rows`,`${cat.name} · ${added} added${updated?`, ${updated} updated`:""} · ${data.parsed.filter(r=>!r.valid).length} skipped`,"import");ui.activeCategoryId=cat.id;ui.modal=null;persist();toast(`${added+updated} rows imported into ${cat.name}`);}
 });
 
-if(channel) channel.onmessage=e=>{if(e.data?.source===tabId||!e.data?.db)return;db=e.data.db;ui.lastSync=e.data.at||Date.now();render();toast("Synced a teammate change");};
-window.addEventListener("storage",e=>{if(e.key===STORAGE_KEY&&e.newValue){try{db=JSON.parse(e.newValue);ui.lastSync=Date.now();render();}catch{}}});
 setInterval(()=>{document.querySelectorAll("time").forEach(()=>{});},30000);
-load();
-render();
+bootstrap();
 
   </script>
 </body>
 </html>
+
