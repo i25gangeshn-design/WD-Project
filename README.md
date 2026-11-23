@@ -14,6 +14,12 @@ Use Node.js 20 or later. Copy `.env.example` to `.env.local`, set the Supabase p
 
 Apply the versioned migrations in `supabase/migrations/` to the existing Supabase project. The schema is normalized, uses RLS, limits inventory images to a private bucket, and exposes security-checked RPCs for event creation/join/code rotation and atomic inventory updates. Configure the production and preview redirect URLs in Supabase Auth.
 
+## Email signup and verification
+
+Signup now has a six-digit email-code screen. Supabase `verifyOtp` confirms the account and creates the authenticated session, so the user enters the app immediately after verification. In the Supabase Dashboard, open **Authentication → Email Templates → Confirm signup** and make sure the template contains `{{ .Token }}` (the one-time code), not only `{{ .ConfirmationURL }}`. The Supabase project must have email confirmations enabled.
+
+The Auth logs previously showed `over_email_send_rate_limit` and `email_not_confirmed`. Supabase's built-in mailer has a very low sending limit and may only send to organization-authorized addresses. For real users, configure a custom SMTP provider in **Authentication → Emails → SMTP Settings**. Do not add SMTP credentials to GitHub or browser-visible variables.
+
 The Vercel project serves `final_frontend.html` at `/`, serves `/api/config` for public runtime configuration, and verifies Turnstile through `/api/captcha/verify`. Its output directory must remain `.` because this repository has no `public/` build folder. Configure these variables in the existing Vercel project:
 
 - `NEXT_PUBLIC_SUPABASE_URL`
@@ -26,4 +32,4 @@ Do not configure a service-role key unless a future server-only operation specif
 
 ## Current verification
 
-`node scripts/check.mjs` checks JavaScript syntax and the HTML script. `node --test tests/*.test.js` runs validation tests. A Vercel preview has returned HTTP 200 at `/` after correcting the output-directory setting. The existing production alias has not been promoted to this branch. Authentication and CRUD still require the Turnstile values and a full browser end-to-end pass before production use.
+`node scripts/check.mjs` checks JavaScript syntax and the HTML script. `node --test tests/*.test.js` runs validation tests. The existing Vercel production alias returns HTTP 200. Email signup now supports OTP verification, but a full browser sign-up pass requires the Supabase confirmation template to contain `{{ .Token }}` and custom SMTP for delivery beyond the built-in limits.
