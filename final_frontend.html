@@ -1239,7 +1239,7 @@ async function handleSubmit(form) {
         await backend.requestPasswordReset(email);ui.authNotice="If this account exists, a reset link is on its way.";
       }
       ui.authError="";ui.authBusy=false;makeCaptcha();render();
-    }catch(error){ui.authBusy=false;ui.authError=error.message||"The request could not be completed.";if(type==="signup"&&/temporarily limited verification emails|built-in email sender/i.test(ui.authError)){ui.pendingEmail=email;ui.authTab="verify-email";ui.authNotice="There may already be a pending signup for this address. Enter a code you received, or try resending after the email limit resets.";}makeCaptcha();render();}
+    }catch(error){ui.authBusy=false;ui.authError=error.message||"The request could not be completed.";if((type==="signup"&&/temporarily limited verification emails|built-in email sender/i.test(ui.authError))||(type==="login"&&/Verify your email/i.test(ui.authError))){ui.pendingEmail=email;ui.authTab="verify-email";ui.authNotice="This address may already have a pending signup. Enter its six-digit code, or request one after the email limit resets.";}makeCaptcha();render();}
     return;
   } else if(type==="create-event") {
     const name=String(data.name||"").trim();if(!name||name.length>120){ui.modal={...ui.modal,error:"Event name must be between 1 and 120 characters."};renderModal();return;}
