@@ -666,12 +666,10 @@ let ui = {
   dataError: "",
   modal: null,
   popover: null,
-  rolePreview: null,
   changedAsset: null,
   lastSync: Date.now(),
   categoryDraft: null,
-  importData: null,
-  revealedCodes: {join:false,admin:false}
+  importData: null
 };
 
 const svgPaths = {
@@ -745,7 +743,7 @@ function bindWorkspaceRealtime() {
   if (unsubscribeWorkspace) unsubscribeWorkspace();
   unsubscribeWorkspace = null;
   if (!backend || !authUser || !session.eventId) return;
-  unsubscribeWorkspace = backend.subscribeToWorkspace(session.eventId, async () => {
+  unsubscribeWorkspace = backend.subscribeToWorkspace(session.eventId, session.userId, async () => {
     try {
       await writeQueue;
       const selected = session.eventId;
@@ -758,12 +756,17 @@ function bindWorkspaceRealtime() {
       ui.dataError = error.message || "A live update could not be loaded. Refresh to try again.";
       render();
     }
+  }, onlineUserIds => {
+    const event = db.events.find(item => item.id === session.eventId);
+    if (!event) return;
+    event.members.forEach(member => { member.online = onlineUserIds.has(member.userId); });
+    render();
   });
 }
 function currentUser() { return db.users.find(u => u.id === session.userId); }
 function currentEvent() { return db.events.find(e => e.id === session.eventId) || db.events[0]; }
 function actualRole(event = currentEvent()) { return event?.members.find(m => m.userId === session.userId)?.role || null; }
-function role(event = currentEvent()) { return ui.rolePreview || actualRole(event); }
+function role(event = currentEvent()) { return actualRole(event); }
 function isManager() { return ["creator","admin"].includes(role()); }
 function isCreator() { return role() === "creator"; }
 function userById(uid) { return db.users.find(u => u.id === uid) || {id:uid,name:"Former member",email:"",color:"#ddd"}; }
@@ -914,7 +917,6 @@ function render() {
         </header>
         <div class="content page-stage">
           ${ui.dataError?`<p class="error-text" role="alert">${esc(ui.dataError)}</p>`:""}
-          ${ui.rolePreview ? `<div class="role-preview" data-reveal><span>${icon("eye","sm")} <strong>Permission preview:</strong> You are seeing this event as ${esc(roleLabel(ui.rolePreview))}. No membership was changed.</span><button class="btn small soft" data-action="clear-role-preview">Return to my role</button></div>` : ""}
           ${renderPage()}
         </div>
       </main>
@@ -930,7 +932,7 @@ function render() {
 function renderWorkspace() {
   const event=currentEvent(), unread=event.notifications.filter(n=>n.unread).length;
   const stage=app.querySelector(".page-stage");
-  if(stage) stage.innerHTML=`${ui.dataError?`<p class="error-text" role="alert">${esc(ui.dataError)}</p>`:""}${ui.rolePreview ? `<div class="role-preview" data-reveal><span>${icon("eye","sm")} <strong>Permission preview:</strong> You are seeing this event as ${esc(roleLabel(ui.rolePreview))}. No membership was changed.</span><button class="btn small soft" data-action="clear-role-preview">Return to my role</button></div>` : ""}${renderPage()}`;
+  if(stage) stage.innerHTML=`${ui.dataError?`<p class="error-text" role="alert">${esc(ui.dataError)}</p>`:""}${renderPage()}`;
   app.querySelectorAll("[data-action='navigate']").forEach(node=>node.classList.toggle("active",node.dataset.page===ui.page));
   const breadcrumb=app.querySelector(".breadcrumb strong"); if(breadcrumb) breadcrumb.textContent=pageTitle(ui.page);
   const activityNav=app.querySelector('.nav-item[data-page="activity"]');
@@ -954,9 +956,10 @@ function renderPage() {
 function renderAuth() {
   const login=ui.authTab==="login";
   const reset=ui.authTab==="reset";
+  const verifyEmail=ui.authTab==="verify-email";
   const setPassword=new URLSearchParams(location.search).has("reset-password");
   const runArrival=shouldRunArrival();
-  const authMode=setPassword?"password-reset-confirm":reset?"password-reset":login?"login":"signup";
+  const authMode=setPassword?"password-reset-confirm":verifyEmail?"signup-verify":reset?"password-reset":login?"login":"signup";
   app.innerHTML=`
     ${runArrival?arrivalMarkup():""}
     <main class="auth-shell ${runArrival?"auth-awaiting":"auth-revealed"}" ${runArrival?"inert":""}>
@@ -971,20 +974,22 @@ function renderAuth() {
         <div class="mini-ledger" aria-hidden="true"><div class="mini-ledger-row"><span class="time">LIVE</span><span>Event inventory, shared with your crew</span><span class="tick">SYNCED</span></div><div class="mini-ledger-row"><span class="time">RLS</span><span>Membership controls event access</span><span class="tick">PRIVATE</span></div><div class="mini-ledger-row"><span class="time">AUDIT</span><span>Changes stay in the event ledger</span><span class="tick">READY</span></div></div>
       </section>
       <section class="auth-panel"><div class="auth-card">
-        ${!setPassword?`<div class="auth-tabs"><button class="auth-tab ${login&&!reset?"active":""}" data-action="auth-tab" data-tab="login">Sign in</button><button class="auth-tab ${!login&&!reset?"active":""}" data-action="auth-tab" data-tab="signup">Make an account</button></div>`:""}
-        <h2>${setPassword?"Choose a new password.":reset?"Reset your password.":login?"Welcome back.":"Start in the backroom."}</h2>
-        <p class="intro">${setPassword?"Choose a new password for your account.":reset?"We’ll email you a secure reset link.":login?"Your event floor is waiting.":"Create an account, then start or join an event."}</p>
+        ${!setPassword&&!verifyEmail?`<div class="auth-tabs"><button class="auth-tab ${login&&!reset?"active":""}" data-action="auth-tab" data-tab="login">Sign in</button><button class="auth-tab ${!login&&!reset?"active":""}" data-action="auth-tab" data-tab="signup">Make an account</button></div>`:""}
+        <h2>${setPassword?"Choose a new password.":verifyEmail?"Check your email.":reset?"Reset your password.":login?"Welcome back.":"Start in the backroom."}</h2>
+        <p class="intro">${setPassword?"Choose a strong password for your account.":verifyEmail?"Enter the six-digit code we sent to verify your address. You’ll be signed in automatically.":reset?"We’ll email you a secure reset link.":login?"Your event floor is waiting.":"Create an account, then start or join an event."}</p>
         <form class="auth-form" data-form="${authMode}">
-          ${!login&&!reset&&!setPassword?`<div class="field"><label for="auth-name">Your name</label><input class="input" id="auth-name" name="name" autocomplete="name" maxlength="100" placeholder="e.g. Rhea Kapoor" required></div>`:""}
-          ${!setPassword?`<div class="field"><label for="auth-email">Email</label><input class="input" id="auth-email" type="email" name="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></div>`:""}
-          ${!reset?`<div class="field"><label for="auth-password">${setPassword?"New password":"Password"}</label><div class="password-wrap"><input class="input" id="auth-password" type="password" name="password" autocomplete="${login?"current-password":"new-password"}" minlength="12" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></div><p class="help">Use at least 12 characters.</p></div>`:""}
-          ${!login&&!reset&&!setPassword?`<div class="field"><label for="auth-confirm">Confirm password</label><input class="input" id="auth-confirm" type="password" name="confirmPassword" autocomplete="new-password" minlength="12" maxlength="128" required></div>`:""}
+          ${!login&&!reset&&!setPassword&&!verifyEmail?`<div class="field"><label for="auth-name">Your name</label><input class="input" id="auth-name" name="name" autocomplete="name" maxlength="100" placeholder="e.g. Rhea Kapoor" required></div>`:""}
+          ${!setPassword&&!verifyEmail?`<div class="field"><label for="auth-email">Email</label><input class="input" id="auth-email" type="email" name="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></div>`:""}
+          ${verifyEmail?`<div class="field"><label for="auth-email-display">Account email</label><input class="input" id="auth-email-display" type="email" value="${esc(ui.pendingEmail)}" readonly></div><div class="field"><label for="auth-otp">Six-digit code</label><input class="input" id="auth-otp" name="token" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="000000" required></div>`:""}
+          ${!reset&&!verifyEmail?`<div class="field"><label for="auth-password">${setPassword?"New password":"Password"}</label><div class="password-wrap"><input class="input" id="auth-password" type="password" name="password" autocomplete="${login?"current-password":"new-password"}" minlength="12" maxlength="128" required><button class="password-toggle" type="button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></div><p class="help">Use at least 12 characters.</p></div>`:""}
+          ${!login&&!reset&&!setPassword&&!verifyEmail?`<div class="field"><label for="auth-confirm">Confirm password</label><input class="input" id="auth-confirm" type="password" name="confirmPassword" autocomplete="new-password" minlength="12" maxlength="128" required></div>`:""}
           ${!setPassword?`<div class="field"><span class="field-label">Human verification</span><div id="turnstile-widget" aria-label="Human verification"></div><p id="turnstile-error" class="error-text" role="alert" hidden></p>${!backendConfig?.turnstileSiteKey?`<p class="error-text">Human verification is not configured for this deployment yet.</p>`:""}</div>`:""}
           ${ui.authError?`<p class="error-text" role="alert">${esc(ui.authError)}</p>`:""}
           ${ui.authNotice?`<p class="help" role="status">${esc(ui.authNotice)}</p>`:""}
-          ${reset?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Sending…":"Send reset link"} ${icon("arrow")}</button>`:setPassword?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Saving…":"Update password"} ${icon("arrow")}</button>`:`<button class="btn primary" type="submit" ${ui.authBusy||!backendConfig?.turnstileSiteKey?"disabled":""}>${ui.authBusy?"Working…":login?"Open event floor":"Create my account"} ${icon("arrow")}</button>`}
+          ${reset?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Sending…":"Send reset link"} ${icon("arrow")}</button>`:setPassword?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Saving…":"Update password"} ${icon("arrow")}</button>`:verifyEmail?`<button class="btn primary" type="submit" ${ui.authBusy?"disabled":""}>${ui.authBusy?"Verifying…":"Verify & sign in"} ${icon("arrow")}</button>`:`<button class="btn primary" type="submit" ${ui.authBusy||!backendConfig?.turnstileSiteKey?"disabled":""}>${ui.authBusy?"Working…":login?"Open event floor":"Create my account"} ${icon("arrow")}</button>`}
           ${login?`<button class="btn link" type="button" data-action="password-reset">Forgot password?</button>`:""}
         </form>
+        ${verifyEmail?`<div class="row gap" style="margin-top:14px"><button class="btn small soft" type="button" data-action="resend-signup-otp" ${ui.authBusy?"disabled":""}>Resend code</button><button class="btn link" type="button" data-action="auth-tab" data-tab="signup">Back to account details</button></div>`:""}
         ${reset?`<button class="btn link" style="margin-top:16px" data-action="auth-tab" data-tab="login">Back to sign in</button>`:""}
       </div><div class="auth-footer">Private event workspaces · Supabase authentication</div></section>
     </main>`;
@@ -1122,8 +1127,8 @@ function renderPerson(member) {
 
 function renderAccess() {
   const event=currentEvent(), creator=isCreator();
-  const joinVisible=ui.revealedCodes.join, adminVisible=ui.revealedCodes.admin;
-  return `<header class="page-heading" data-reveal><div><p class="eyebrow">CODES & PERMISSIONS</p><h1>Event access</h1><p>The member code opens the door. The admin code changes what somebody can manage.</p></div></header>${creator?`<div class="access-grid"><article class="code-card" data-reveal><span class="badge counted">Member code</span><h2>Invite the crew</h2><p>Anyone with an account can join this event as a member using this code.</p><div class="big-code ${joinVisible?"":"masked"}">${joinVisible&&event.joinCode?esc(event.joinCode):event.joinCode?"JOIN-••••-••":"No active code shown"}</div><div class="code-actions"><button class="btn soft" data-action="${event.joinCode?"reveal-code":"confirm-regenerate"}" data-kind="join">${icon(joinVisible?"eye":"lock")} ${event.joinCode?(joinVisible?"Hide":"Reveal"):"Generate code"}</button><button class="btn primary" data-action="copy-code" data-code="${esc(event.joinCode||"")}" ${!event.joinCode?"disabled":""}>${icon("copy")} Copy code</button><button class="btn soft" data-action="confirm-regenerate" data-kind="join">${icon("rotate")} Replace</button></div></article><article class="code-card admin" data-reveal><span class="badge tracked">Admin code</span><h2>Hand over controls</h2><p>An existing member can enter this code to become an admin. Share it carefully.</p><div class="big-code ${adminVisible?"":"masked"}">${adminVisible&&event.adminCode?esc(event.adminCode):event.adminCode?"ADMIN-••••-••":"No active code shown"}</div><div class="code-actions"><button class="btn soft" data-action="${event.adminCode?"reveal-code":"confirm-regenerate"}" data-kind="admin">${icon(adminVisible?"eye":"lock")} ${event.adminCode?(adminVisible?"Hide":"Reveal"):"Generate code"}</button><button class="btn primary" style="background:var(--paper-light);color:var(--ink)" data-action="copy-code" data-code="${esc(event.adminCode||"")}" ${!event.adminCode?"disabled":""}>${icon("copy")} Copy code</button><button class="btn soft" data-action="confirm-regenerate" data-kind="admin">${icon("rotate")} Replace</button></div></article></div><div class="permission-note" data-reveal style="margin-top:15px">${icon("shield","lg")}<div><h3>Only you can see or replace these codes.</h3><p>Replacing a code invalidates the old one immediately. Existing members and admins keep their roles.</p></div></div>`:`<div class="permission-note" data-reveal>${icon("lock","lg")}<div><h3>Codes live with the creator.</h3><p>For safety, only ${esc(userById(event.creatorId).name)} can view or replace this event’s join and admin codes.</p></div></div>${actualRole()==="member"?`<section class="panel" data-reveal style="margin-top:15px;max-width:620px"><header class="panel-head"><h2>Have the admin code?</h2></header><form class="panel-body stack" data-form="admin-code"><p class="help">Enter the code shared by the creator. Your role changes immediately.</p><input class="input mono" name="code" placeholder="ADMIN-CODE" required><button class="btn primary" type="submit">Become an admin ${icon("arrow")}</button></form></section>`:""}`}`;
+  const codeCard=(label,title,description,value,admin=false)=>`<article class="code-card ${admin?"admin":""}" data-reveal><span class="badge ${admin?"tracked":"counted"}">${label}</span><h2>${title}</h2><p>${description}</p><div class="big-code">${value?esc(value):"Code unavailable"}</div><div class="code-actions"><button class="btn primary" ${admin?'style="background:var(--paper-light);color:var(--ink)" ':""}data-action="copy-code" data-code="${esc(value||"")}" ${!value?"disabled":""}>${icon("copy")} Copy code</button></div></article>`;
+  return `<header class="page-heading" data-reveal><div><p class="eyebrow">CODES & PERMISSIONS</p><h1>Event access</h1><p>The member code opens the door. The admin code makes someone an admin for this event.</p></div></header>${creator?`<div class="access-grid">${codeCard("Member code","Invite the crew","Anyone with an account can join this event as a member using this code.",event.joinCode)}${codeCard("Admin code","Hand over controls","Enter this code while joining to become an admin. Share it carefully.",event.adminCode,true)}</div><div class="permission-note" data-reveal style="margin-top:15px">${icon("shield","lg")}<div><h3>These codes stay the same for this event.</h3><p>Only the event creator can view them. Joining with the admin code grants admin access to this event.</p></div></div>`:`<div class="permission-note" data-reveal>${icon("lock","lg")}<div><h3>Codes live with the creator.</h3><p>Only ${esc(userById(event.creatorId).name)} can view this event’s member and admin codes. Enter either code from “Join with a code” to join the event.</p></div></div>`}`;
 }
 
 function renderSettings() {
@@ -1138,7 +1143,7 @@ function renderPopover() {
     const memberships=db.events.filter(e=>e.members.some(m=>m.userId===session.userId));
     popoverRoot.innerHTML=`<div class="popover event-menu"><div class="popover-head"><strong>Event dock</strong><button class="modal-close" data-action="close-popover">${icon("x","sm")}</button></div><div class="popover-body">${memberships.map(e=>{const r=e.members.find(m=>m.userId===session.userId)?.role;return `<button class="event-option ${e.id===session.eventId?"active":""}" data-action="switch-event" data-event="${e.id}"><span class="event-glyph">${esc(eventInitials(e))}</span><span><strong>${esc(e.name)}</strong><small>${esc(roleLabel(r))} · ${esc(e.location)}</small></span>${e.id===session.eventId?icon("check","sm"):""}</button>`;}).join("")}</div><div class="menu-actions"><button class="btn small signal" data-action="open-modal" data-modal="create-event">${icon("plus","sm")} Create</button><button class="btn small" data-action="open-modal" data-modal="join-event">${icon("key","sm")} Join</button></div></div>`;
   } else if(ui.popover==="profile") {
-    popoverRoot.innerHTML=`<div class="popover profile-menu"><div class="profile-section"><p class="eyebrow">PREVIEW PERMISSIONS</p>${["creator","admin","member"].map(r=>`<button class="menu-row" data-action="preview-role" data-role="${r}"><span class="stamp" style="color:${r==="creator"?"#aa372f":"#496353"}">${r}</span><span>${r===actualRole()?"My current role":`View as ${r}`}</span></button>`).join("")}</div><div class="profile-section"><button class="menu-row replay-arrival-mark" data-action="replay-arrival">${icon("arrow")} Replay arrival</button><button class="menu-row" data-action="logout">${icon("logout")} Sign out</button></div></div>`;
+    popoverRoot.innerHTML=`<div class="popover profile-menu"><div class="profile-section"><button class="menu-row replay-arrival-mark" data-action="replay-arrival">${icon("arrow")} Replay arrival</button><button class="menu-row" data-action="logout">${icon("logout")} Sign out</button></div></div>`;
   } else if(ui.popover==="notifications") {
     const list=event.notifications.slice(0,6);
     popoverRoot.innerHTML=`<div class="popover notifications-pop"><div class="popover-head"><strong>What moved</strong><button class="text-btn tiny" data-action="mark-read">Mark all read</button></div><div class="popover-body">${list.map(n=>`<div class="notification-item ${n.unread?"unread":""}"><span class="activity-icon ${n.kind}">${icon(n.kind==="people"?"users":n.kind==="import"?"upload":"pulse","sm")}</span><span><p>${esc(n.title)}</p><time>${timeAgo(n.at)} · ${esc(n.detail)}</time></span></div>`).join("")||emptyState("Nothing new.","The event floor is quiet.")}</div><div class="menu-actions" style="grid-template-columns:1fr"><button class="btn small" data-action="navigate" data-page="activity">Open full ledger</button></div></div>`;
@@ -1161,8 +1166,8 @@ function renderModal() {
     body=`<form id="modal-form" class="stack" data-form="create-event"><div class="field"><label>Event name</label><input class="input" name="name" placeholder="e.g. Meridian Summit '27" required autofocus></div><div class="field"><label>Location</label><input class="input" name="location" placeholder="Venue or city"></div><div class="field"><label>Date</label><input class="input" type="date" name="date"></div><div class="field"><label>Working note <span class="muted">(optional)</span></label><textarea class="textarea" name="note" placeholder="What is the crew preparing for?"></textarea></div></form>`;
     foot=`<button class="btn soft" data-action="close-modal">Cancel</button><button class="btn signal" type="submit" form="modal-form">Create event ${icon("arrow")}</button>`;
   } else if(name==="join-event") {
-    title="Join an event";subtitle="Use the member code shared by its creator.";
-    body=`<form id="modal-form" class="stack" data-form="join-event"><div class="field"><label>Member code</label><input class="input mono" name="code" placeholder="EVENT-CODE" autocomplete="off" style="font-size:19px;letter-spacing:.09em;text-transform:uppercase" required autofocus></div><p class="help">Ask the event creator for an active access code.</p></form>`;
+    title="Join an event";subtitle="Enter a member or admin code shared by the event creator.";
+    body=`<form id="modal-form" class="stack" data-form="join-event"><div class="field"><label>Member or admin code</label><input class="input mono" name="code" placeholder="EVENT-CODE" autocomplete="off" style="font-size:19px;letter-spacing:.09em;text-transform:uppercase" required autofocus></div><p class="help">A member code joins as a member. An admin code joins as an admin for this event.</p></form>`;
     foot=`<button class="btn soft" data-action="close-modal">Cancel</button><button class="btn primary" type="submit" form="modal-form">Join event ${icon("arrow")}</button>`;
   } else if(name==="category") {
     const d=ui.categoryDraft;title="New inventory category";subtitle="Choose how records in this category behave.";wide=true;
@@ -1205,14 +1210,14 @@ function syncCategoryDraftFromDom() {
 async function handleSubmit(form) {
   const data=Object.fromEntries(new FormData(form));
   const type=form.dataset.form;
-  if(type==="login" || type==="signup" || type==="password-reset" || type==="password-reset-confirm") {
+  if(type==="login" || type==="signup" || type==="signup-verify" || type==="password-reset" || type==="password-reset-confirm") {
     ui.authError="";ui.authNotice="";
     if(type==="password-reset-confirm"){
       if(String(data.password||"").length<12||String(data.password).length>128){ui.authError="Use a password between 12 and 128 characters.";render();return;}
       if(String(data.password)!==String(data.confirmPassword)){ui.authError="Passwords do not match.";render();return;}
       ui.authBusy=true;render();try{await backend.updatePassword(String(data.password));history.replaceState({},"",location.pathname);ui.authTab="login";ui.authNotice="Your password was updated. Sign in with your new password.";ui.authBusy=false;render();}catch(error){ui.authBusy=false;ui.authError=error.message;render();}return;
     }
-    const email=String(data.email||"").trim().toLowerCase();
+    const email=String(type==="signup-verify"?ui.pendingEmail:data.email||"").trim().toLowerCase();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254){ui.authError="Enter a valid email address.";render();return;}
     if(type==="signup"){
       if(String(data.name||"").trim().length<1||String(data.name).trim().length>100){ui.authError="Enter a name of 1 to 100 characters.";render();return;}
@@ -1228,21 +1233,23 @@ async function handleSubmit(form) {
         authUser=await backend.signIn({email,password:String(data.password)});session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();
       }else if(type==="signup"){
         const result=await backend.signUp({name:String(data.name).trim(),email,password:String(data.password)});
-        if(!result.session||!result.user)throw new Error("Account created, but sign-in was not returned. Turn off Confirm email in the Supabase Email provider settings, then try again.");
-        authUser=result.user;session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();
+        if(result.session&&result.user){authUser=result.user;session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();}else{ui.pendingEmail=email;ui.authTab="verify-email";ui.authNotice="A six-digit verification code was sent. Enter it here to finish creating your account and sign in.";}
+      }else if(type==="signup-verify"){
+        if(!/^\d{6}$/.test(String(data.token||""))){ui.authBusy=false;ui.authError="Enter the six-digit code from your email.";render();return;}
+        const result=await backend.verifySignupOtp({email,token:String(data.token).trim()});authUser=result.user;session.userId=authUser.id;db=await backend.loadWorkspace(authUser);session.eventId=db.events[0]?.id||null;bindWorkspaceRealtime();ui.pendingEmail="";ui.authTab="login";
       }else{
         await backend.requestPasswordReset(email);ui.authNotice="If this account exists, a reset link is on its way.";
       }
       ui.authError="";ui.authBusy=false;makeCaptcha();render();
-    }catch(error){ui.authBusy=false;ui.authError=error.message||"The request could not be completed.";makeCaptcha();render();}
+    }catch(error){ui.authBusy=false;ui.authError=error.message||"The request could not be completed.";if((type==="signup"&&/temporarily limited verification emails|built-in email sender/i.test(ui.authError))||(type==="login"&&/Verify your email/i.test(ui.authError))){ui.pendingEmail=email;ui.authTab="verify-email";ui.authNotice="This address may already have a pending signup. Enter its six-digit code, or request one after the email limit resets.";}makeCaptcha();render();}
     return;
   } else if(type==="create-event") {
     const name=String(data.name||"").trim();if(!name||name.length>120){ui.modal={...ui.modal,error:"Event name must be between 1 and 120 characters."};renderModal();return;}
     const event=await backend.createEvent({name,location:String(data.location||"").trim(),date:String(data.date||"")||null,note:String(data.note||"").trim()},session.userId);
-    db.events.push(event);session.eventId=event.id;ui.page="overview";ui.activeCategoryId=null;ui.rolePreview=null;ui.modal=null;ui.revealedCodes={join:true,admin:true};persist();
+    db.events.push(event);session.eventId=event.id;ui.page="overview";ui.activeCategoryId=null;ui.modal=null;persist();
   } else if(type==="join-event") {
     const codeValue=String(data.code||"").trim();if(codeValue.length<12||codeValue.length>64){ui.modal={...ui.modal,error:"Enter a valid event access code."};renderModal();return;}
-    const membership=await backend.joinEvent(codeValue,false);authUser=(await backend.getClient().auth.getUser()).data.user;db=await backend.loadWorkspace(authUser);session.userId=authUser.id;session.eventId=membership.event_id;ui.rolePreview=null;ui.modal=null;ui.page="overview";persist();
+    const membership=await backend.joinEvent(codeValue);authUser=(await backend.getClient().auth.getUser()).data.user;db=await backend.loadWorkspace(authUser);session.userId=authUser.id;session.eventId=membership.event_id;ui.modal=null;ui.page="overview";bindWorkspaceRealtime();persist();
   } else if(type==="category") {
     syncCategoryDraftFromDom();const d=ui.categoryDraft;const name=String(d.name||"").trim();if(!name){toast("Give the category a name","error");return;}
     if(d.type==="tracked") {const labels=d.fields.map(f=>f.label.trim().toLowerCase());if(d.fields.some(f=>!f.label.trim())||new Set(labels).size!==labels.length){toast("Field names must be filled and unique","error");return;}}
@@ -1254,8 +1261,6 @@ async function handleSubmit(form) {
     ui.modal=null;persist();toast("Inventory updated");
   } else if(type==="status-context") {
     const cat=categoryById(ui.activeCategoryId),asset=cat.assets.find(a=>a.id===ui.modal.assetId);asset.status="used";asset.context=String(data.context||"").trim();addActivity(`${currentUser().name} marked ${recordTitle(cat,asset)} in use`,`${cat.name}${asset.context?` · ${asset.context}`:""}`,"inventory");ui.modal=null;withTransition(()=>persist());toast("Moved to In use");
-  } else if(type==="admin-code") {
-    const membership=await backend.joinEvent(String(data.code||"").trim(),true);authUser=(await backend.getClient().auth.getUser()).data.user;db=await backend.loadWorkspace(authUser);session.userId=authUser.id;session.eventId=membership.event_id;ui.page="overview";persist();
   } else if(type==="event-settings") {
     const event=currentEvent();event.name=String(data.name).trim();event.startDate=String(data.date||"")||null;event.endDate=event.startDate;event.date=event.startDate?new Date(`${event.startDate}T00:00:00`).toLocaleDateString():"";event.location=String(data.location||"").trim();event.note=String(data.note||"").trim();addActivity(`${currentUser().name} updated event details`,event.name,"people");persist();
   }
@@ -1270,8 +1275,7 @@ async function runConfirm() {
   if(c.type==="delete-category") {const cat=categoryById(c.categoryId);event.categories=event.categories.filter(v=>v.id!==c.categoryId);addActivity(`${currentUser().name} deleted ${cat.name}`,`${cat.assets.length} records removed with the category`,"inventory");ui.activeCategoryId=event.categories[0]?.id||null;}
   if(c.type==="delete-asset") {const cat=categoryById(c.categoryId),asset=cat.assets.find(a=>a.id===c.assetId);const name=cat.type==="counted"?asset.name:recordTitle(cat,asset);cat.assets=cat.assets.filter(a=>a.id!==c.assetId);addActivity(`${currentUser().name} deleted ${name}`,`${cat.name} · record removed`,"inventory");}
   if(c.type==="remove-member") {const user=userById(c.userId);event.members=event.members.filter(m=>m.userId!==c.userId);addActivity(`${currentUser().name} removed ${user.name}`,`Access to ${event.name} removed`,"people");}
-  if(c.type==="regenerate") {const fresh=await backend.rotateCode(event.id,c.kind==="admin");if(c.kind==="join")event.joinCode=fresh;else event.adminCode=fresh;ui.revealedCodes[c.kind]=true;addActivity(`${currentUser().name} replaced the ${c.kind} code`,`The previous code is no longer active`,"people");}
-  if(c.type==="delete-event") {db.events=db.events.filter(e=>e.id!==event.id);const next=db.events.find(e=>e.members.some(m=>m.userId===session.userId));session.eventId=next?.id||null;ui.page="overview";ui.rolePreview=null;ui.modal=null;persist();toast(`${event.name} was deleted`);return;}
+  if(c.type==="delete-event") {db.events=db.events.filter(e=>e.id!==event.id);const next=db.events.find(e=>e.members.some(m=>m.userId===session.userId));session.eventId=next?.id||null;ui.page="overview";ui.modal=null;persist();toast(`${event.name} was deleted`);return;}
   ui.modal=null;persist();toast(c.success||"Change applied");
 }
 
@@ -1327,6 +1331,13 @@ document.addEventListener("click",async e=>{
   else if(action==="replay-arrival"){ui.popover=null;render();replayArrival();}
   else if(action==="toggle-password"){const input=el.closest(".password-wrap")?.querySelector("input");if(input){const show=input.type==="password";input.type=show?"text":"password";el.setAttribute("aria-pressed",String(show));el.setAttribute("aria-label",show?"Hide password":"Show password");}}
   else if(action==="auth-tab"){withTransition(()=>{ui.authTab=el.dataset.tab;ui.authError="";makeCaptcha();render();});}
+  else if(action==="resend-signup-otp"){
+    if(!ui.pendingEmail){ui.authTab="signup";ui.authError="Enter your email and create your account again.";render();return;}
+    if(!ui.captchaToken){ui.authError="Complete the human verification before requesting another code.";render();return;}
+    ui.authBusy=true;ui.authError="";render();
+    try{await backend.verifyCaptcha(ui.captchaToken);await backend.resendSignupOtp(ui.pendingEmail);ui.authNotice="A new six-digit code was sent. Check your inbox and spam folder.";ui.authBusy=false;makeCaptcha();render();}
+    catch(error){ui.authBusy=false;ui.authError=error.message||"Could not resend the code.";makeCaptcha();render();}
+  }
   else if(action==="refresh-captcha"){makeCaptcha();ui.authError="";render();}
   else if(action==="navigate"){withTransition(()=>{ui.page=el.dataset.page;ui.popover=null;if(ui.page==="activity")currentEvent().notifications.forEach(n=>n.unread=false);persist({broadcast:false});});}
   else if(action==="toggle-popover"){ui.popover=ui.popover===el.dataset.popover?null:el.dataset.popover;renderPopover();}
@@ -1334,11 +1345,9 @@ document.addEventListener("click",async e=>{
   else if(action==="open-modal"){if(el.disabled)return;openModal(el.dataset.modal);}
   else if(action==="close-modal"){closeModal();}
   else if(action==="overlay-close"&&e.target===el){closeModal();}
-  else if(action==="switch-event"){withTransition(()=>{session.eventId=el.dataset.event;bindWorkspaceRealtime();ui.popover=null;ui.rolePreview=null;ui.page="overview";ui.activeCategoryId=currentEvent().categories[0]?.id||null;persist({broadcast:false});});}
-  else if(action==="logout"){await backend.signOut();authUser=null;session.userId=null;session.eventId=null;db={version:4,users:[],events:[]};ui.popover=null;ui.modal=null;ui.rolePreview=null;makeCaptcha();render();}
+  else if(action==="switch-event"){withTransition(()=>{session.eventId=el.dataset.event;bindWorkspaceRealtime();ui.popover=null;ui.page="overview";ui.activeCategoryId=currentEvent().categories[0]?.id||null;persist({broadcast:false});});}
+  else if(action==="logout"){await backend.signOut();authUser=null;session.userId=null;session.eventId=null;db={version:4,users:[],events:[]};ui.popover=null;ui.modal=null;makeCaptcha();render();}
   else if(action==="password-reset"){ui.authTab="reset";ui.authError="";ui.authNotice="";render();}
-  else if(action==="preview-role"){ui.rolePreview=el.dataset.role===actualRole()?null:el.dataset.role;ui.popover=null;render();}
-  else if(action==="clear-role-preview"){ui.rolePreview=null;render();}
   else if(action==="select-category"){withTransition(()=>{ui.activeCategoryId=el.dataset.category;ui.search="";render();});}
   else if(action==="open-category"){withTransition(()=>{ui.activeCategoryId=el.dataset.category;ui.page="inventory";render();});}
   else if(action==="quantity"){const cat=categoryById(ui.activeCategoryId),asset=cat.assets.find(a=>a.id===el.dataset.asset);mutateQuantity(asset.id,asset.quantity+Number(el.dataset.delta));}
@@ -1350,10 +1359,8 @@ document.addEventListener("click",async e=>{
   else if(action==="confirm-delete-asset"){const cat=categoryById(ui.activeCategoryId),asset=cat.assets.find(a=>a.id===el.dataset.asset),name=cat.type==="counted"?asset.name:recordTitle(cat,asset);ui.modal={name:"confirm",title:`Delete ${name}?`,message:"The item disappears from the working inventory, but this deletion remains in the activity ledger.",confirmLabel:"Delete record",danger:true,confirm:{type:"delete-asset",categoryId:cat.id,assetId:asset.id,success:"Record deleted"}};renderModal();}
   else if(action==="confirm-remove-member"){const user=userById(el.dataset.user);ui.modal={name:"confirm",title:`Remove ${user.name}?`,message:`They will lose access to ${currentEvent().name}. They can rejoin later with a new active member code.`,confirmLabel:"Remove person",danger:true,confirm:{type:"remove-member",userId:user.id,success:`${user.name} removed`}};renderModal();}
   else if(action==="promote-member"||action==="demote-member"){const member=currentEvent().members.find(m=>m.userId===el.dataset.user),user=userById(member.userId);member.role=action==="promote-member"?"admin":"member";addActivity(`${currentUser().name} made ${user.name} ${member.role==="admin"?"an admin":"a member"}`,`${currentEvent().name} · role updated`,"people");persist();toast(`${user.name} is now ${member.role==="admin"?"an admin":"a member"}`);}
-  else if(action==="reveal-code"){ui.revealedCodes[el.dataset.kind]=!ui.revealedCodes[el.dataset.kind];withTransition(render);}
-  else if(action==="copy-code"){const original=el.innerHTML;try{await navigator.clipboard.writeText(el.dataset.code);el.innerHTML=`${icon("check")} Copied`;toast("Code copied to clipboard");setTimeout(()=>{if(el.isConnected)el.innerHTML=original;},1300);}catch{toast(`Code: ${el.dataset.code}`);}}
-  else if(action==="confirm-regenerate"){const kind=el.dataset.kind;ui.modal={name:"confirm",title:`Replace the ${kind} code?`,message:`The old ${kind} code stops working immediately. Existing people keep their access.`,confirmLabel:"Replace code",danger:false,confirm:{type:"regenerate",kind,success:"A fresh code is active"}};renderModal();}
-  else if(action==="confirm-delete-event"){const ev=currentEvent();ui.modal={name:"confirm",title:`Delete ${ev.name}?`,message:"This permanently removes its inventory, people and activity from the event.",confirmLabel:"Delete event",danger:true,requireText:ev.name,confirm:{type:"delete-event"}};renderModal();}
+    else if(action==="copy-code"){const original=el.innerHTML;try{await navigator.clipboard.writeText(el.dataset.code);el.innerHTML=`${icon("check")} Copied`;toast("Code copied to clipboard");setTimeout(()=>{if(el.isConnected)el.innerHTML=original;},1300);}catch{toast(`Code: ${el.dataset.code}`);}}
+    else if(action==="confirm-delete-event"){const ev=currentEvent();ui.modal={name:"confirm",title:`Delete ${ev.name}?`,message:"This permanently removes its inventory, people and activity from the event.",confirmLabel:"Delete event",danger:true,requireText:ev.name,confirm:{type:"delete-event"}};renderModal();}
   else if(action==="run-confirm"){await runConfirm();}
   else if(action==="mark-read"){await backend.markNotificationsRead(currentEvent());ui.popover=null;persist();}
   else if(action==="activity-filter"){withTransition(()=>{ui.activityFilter=el.dataset.filter;render();});}
